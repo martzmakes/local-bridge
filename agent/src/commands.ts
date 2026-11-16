@@ -2,6 +2,7 @@
 import { ConfigError, NO_ACCOUNT_MESSAGE, defaultConfigPath, loadConfig, resolveSecrets, type Config } from "./config";
 import { runDaemon } from "./daemon";
 import { DeviceKey, type PublicDeviceJwk } from "./device-key";
+import { callFromText } from "./call";
 import { inspectFromText } from "./inspect";
 import { Keychain } from "./keychain";
 import { formatTable, kindOf, permissionRows } from "./permissions";
@@ -17,6 +18,8 @@ export interface CliDeps {
   env?: NodeJS.ProcessEnv;
   /** Reads all of stdin; `inspect` takes its server object from it. */
   readStdin?: () => Promise<string>;
+  /** Overrides call's 60 s limit in tests. */
+  callTimeoutMs?: number;
   /** Overrides inspect's 20 s limit in tests. */
   inspectTimeoutMs?: number;
 }
@@ -44,6 +47,7 @@ Usage: local-bridge-agent <command> [--config <path>] [--machine <name>] [--verb
   rotate-key   Generate a pending key; the running agent announces it to the cloud
   doctor       Check config, key, each local server and the permissions they need
   inspect      Read one server object (JSON) on stdin, start it, print its tools as one JSON line
+  call         Read {"server", "tool", "arguments"} (JSON) on stdin, run that tool once, print the result as one JSON line
   run          Run the agent in the foreground (what the macOS app does)
 
 --machine is only needed by init and pubkey before a config file exists.`;
@@ -143,6 +147,22 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
       const result = await inspectFromText(text, {
         keychain,
         ...(deps.inspectTimeoutMs !== undefined ? { timeoutMs: deps.inspectTimeoutMs } : {}),
+      });
+      out(JSON.stringify(result));
+      return result.ok ? 0 : 1;
+    }
+    case "call": {
+      // One tool, once, for the app's "Try" sheet. One JSON line on stdout; needs no config file.
+      let text: string;
+      try {
+        text = await (deps.readStdin ?? readAllStdin)();
+      } catch {
+        out(JSON.stringify({ ok: false, error: "could not read stdin" }));
+        return 1;
+      }
+      const result = await callFromText(text, {
+        keychain,
+        ...(deps.callTimeoutMs !== undefined ? { timeoutMs: deps.callTimeoutMs } : {}),
       });
       out(JSON.stringify(result));
       return result.ok ? 0 : 1;

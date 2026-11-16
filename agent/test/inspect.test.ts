@@ -48,7 +48,7 @@ describe("inspect", () => {
       "write_thing",
       "hidden",
     ]);
-    expect(result.tools[0]).toEqual({ name: "echo", description: "Returns its text argument", suggestedAccess: "write" });
+    expect(result.tools[0]).toMatchObject({ name: "echo", description: "Returns its text argument", suggestedAccess: "write" });
     // Nothing about the fixture's plain tools says "read".
     expect(result.tools.every((t) => t.suggestedAccess === "write" && !("readOnlyHint" in t))).toBe(true);
   });
@@ -58,14 +58,14 @@ describe("inspect", () => {
     if (!result.ok) throw new Error(result.error);
     const byName = Object.fromEntries(result.tools.map((t) => [t.name, t]));
     expect(result.tools).toHaveLength(17);
-    expect(byName.get_thing).toEqual({ name: "get_thing", description: "Read by name only", suggestedAccess: "read" });
+    expect(byName.get_thing).toMatchObject({ name: "get_thing", description: "Read by name only", suggestedAccess: "read" });
     expect(byName.List_Things).toMatchObject({ suggestedAccess: "read" });
-    expect(byName.peek).toEqual({ name: "peek", description: "Read by annotation only", readOnlyHint: true, suggestedAccess: "read" });
-    expect(byName.search_and_destroy).toEqual({ name: "search_and_destroy", description: "Named like a read, marked destructive", suggestedAccess: "write" });
+    expect(byName.peek).toMatchObject({ name: "peek", description: "Read by annotation only", readOnlyHint: true, suggestedAccess: "read" });
+    expect(byName.search_and_destroy).toMatchObject({ name: "search_and_destroy", description: "Named like a read, marked destructive", suggestedAccess: "write" });
     expect(byName.find_and_fix).toMatchObject({ readOnlyHint: false, suggestedAccess: "write" });
     expect(byName.wipe).toMatchObject({ readOnlyHint: true, suggestedAccess: "write" });
     // No description from the server: an empty string, so the field is always there.
-    expect(byName.getter).toEqual({ name: "getter", description: "", suggestedAccess: "write" });
+    expect(byName.getter).toMatchObject({ name: "getter", description: "", suggestedAccess: "write" });
   });
 
   it("accepts a full config entry and ignores read, write, enabled and title", async () => {

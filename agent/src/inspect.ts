@@ -15,6 +15,8 @@ export const INSPECT_TIMEOUT_ERROR = "timed out starting the server";
 export interface InspectedTool {
   name: string;
   description: string;
+  /** The tool's JSON Schema for its arguments, as the server gives it. The app builds its "Try" form from this. */
+  inputSchema: Record<string, unknown>;
   /** Present only when the server's annotations state it. */
   readOnlyHint?: boolean;
   suggestedAccess: Access;
@@ -40,7 +42,7 @@ export function suggestAccess(name: string, annotations?: { readOnlyHint?: unkno
   return "write";
 }
 
-function shortReason(err: unknown, secrets: string[]): string {
+export function shortReason(err: unknown, secrets: string[]): string {
   const code = (err as { code?: unknown } | null)?.code;
   // A spawn failure: the errno name says it all and quotes nothing.
   if (typeof code === "string" && /^E[A-Z0-9_]+$/.test(code)) return code;
@@ -59,6 +61,7 @@ async function listAllTools(client: Client, timeoutMs: number): Promise<Inspecte
       tools.push({
         name: tool.name,
         description: (tool.description ?? "").slice(0, 8192),
+        inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<string, unknown>,
         ...(typeof readOnlyHint === "boolean" ? { readOnlyHint } : {}),
         suggestedAccess: suggestAccess(tool.name, tool.annotations),
       });
@@ -140,6 +143,7 @@ export const InspectResultSchema = z.union([
       z.strictObject({
         name: z.string(),
         description: z.string(),
+        inputSchema: z.record(z.string(), z.unknown()),
         readOnlyHint: z.boolean().optional(),
         suggestedAccess: z.enum(["read", "write"]),
       }),
