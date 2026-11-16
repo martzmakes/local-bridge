@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "Local Bridge",
+    "slug": "local-bridge",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "scheme": "localbridge",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#07090C"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.martzmakes.localbridge",
+      "associatedDomains": [
+        "applinks:bridge.martzmakes.com",
+        "webcredentials:bridge.martzmakes.com"
+      ],
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.martzmakes.localbridge",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#07090C"
+      },
+      "edgeToEdgeEnabled": true,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "bridge.martzmakes.com",
+              "pathPrefix": "/auth/complete"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "name": "Local Bridge",
+      "shortName": "Local Bridge",
+      "description": "Remote MCP server that bridges cloud agents to MCP servers on my Macs",
+      "backgroundColor": "#07090C",
+      "themeColor": "#07090C"
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}

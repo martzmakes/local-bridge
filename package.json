@@ -1,0 +1,14 @@
+{
+  "name": "local-bridge",
+  "private": true,
+  "scripts": {
+    "app:web": "cd app && npx expo start --web",
+    "app:ios": "cd app && npx expo start --ios",
+    "app:android": "cd app && npx expo start --android",
+    "app:export": "cd app && npx expo export --platform web --clear",
+    "infra:synth": "cd infra && npx cdk synth",
+    "infra:deploy": "cd infra && npx cdk deploy",
+    "infra:diff": "cd infra && npx cdk diff",
+    "typecheck": "cd app && npx tsc --noEmit && cd ../infra && npx tsc --noEmit"
+  }
+}

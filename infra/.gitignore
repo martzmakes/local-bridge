@@ -1,0 +1,12 @@
+*.js
+!jest.config.js
+!babel.config.jose.js
+*.d.ts
+node_modules
+
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+cdk-outputs.json
+
+cdk.out-local/

@@ -1,0 +1,18 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["TEAMID0000.com.martzmakes.localbridge"],
+        "components": [
+          {
+            "/": "/auth/complete*",
+            "comment": "Magic-link sign-in deep link"
+          }
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": ["TEAMID0000.com.martzmakes.localbridge"]
+  }
+}
