@@ -18,12 +18,36 @@ const TOOLS = [
   { name: "hidden", description: "Never exposed by a test config", inputSchema: obj() },
 ];
 
+// `--inspect-tools` adds tools whose names and annotations exercise `inspect`'s suggestions.
+if (process.argv.includes("--inspect-tools")) {
+  TOOLS.push(
+    { name: "get_thing", description: "Read by name only", inputSchema: obj() },
+    { name: "List_Things", description: "Read by name, whatever the case", inputSchema: obj() },
+    { name: "peek", description: "Read by annotation only", inputSchema: obj(), annotations: { readOnlyHint: true } },
+    { name: "search_and_destroy", description: "Named like a read, marked destructive", inputSchema: obj(), annotations: { destructiveHint: true } },
+    { name: "find_and_fix", description: "Named like a read, marked not read-only", inputSchema: obj(), annotations: { readOnlyHint: false } },
+    { name: "wipe", description: "Read-only and destructive at once", inputSchema: obj(), annotations: { readOnlyHint: true, destructiveHint: true } },
+    { name: "getter", inputSchema: obj() },
+  );
+}
+// `--hang` never answers anything, like a server stuck starting up.
+if (process.argv.includes("--hang")) {
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+}
+
 const text = (t, isError = false) => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 // unref: a pending sleep must not keep the process alive once stdin closes.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms).unref());
 
 const server = new Server({ name: "fixture", version: "0.0.0" }, { capabilities: { tools: {} } });
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+// Paged, so clients have to follow nextCursor to see everything.
+const PAGE = 8;
+server.setRequestHandler(ListToolsRequestSchema, async (req) => {
+  const start = Number(req.params?.cursor ?? 0);
+  const next = start + PAGE;
+  return { tools: TOOLS.slice(start, next), ...(next < TOOLS.length ? { nextCursor: String(next) } : {}) };
+});
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const args = req.params.arguments ?? {};
   switch (req.params.name) {

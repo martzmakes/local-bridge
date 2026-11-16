@@ -7,11 +7,15 @@ function fakeStore() {
   const done = new Set<string>();
   const store = {
     log,
+    forTenant(uid: string) {
+      log.push(["forTenant", uid]);
+      return store;
+    },
     bindConnection: async (...a: unknown[]) => void log.push(["bindConnection", ...a]),
     unbindConnection: async (...a: unknown[]) => void log.push(["unbindConnection", ...a]),
     getMachine: async (id: string) => ({ id, enabled: true, keys: [{ kid: "k1", jwk: { kty: "OKP" as const, crv: "Ed25519" as const, x: "x".repeat(43) }, addedAt: 0 }] }),
     putMachineRegistration: async (...a: unknown[]) => void log.push(["putMachineRegistration", ...a]),
-    connection: async (connectionId: string) => (connectionId === "conn-mini" ? { machine: "mini", kid: "k1" } : null),
+    connection: async (connectionId: string) => (connectionId === "conn-mini" ? { uid: "a".repeat(20), machine: "mini", kid: "k1" } : null),
     replaceServers: async (...a: unknown[]) => void log.push(["replaceServers", ...a]),
     heartbeat: async (...a: unknown[]) => void log.push(["heartbeat", ...a]),
     ackCall: async (...a: unknown[]) => void log.push(["ackCall", ...a]),
@@ -33,6 +37,13 @@ function fakeStore() {
 
 function setup() {
   const store = fakeStore();
+  // Tests below index into the log of data operations; tenant binding is asserted separately.
+  const push = store.log.push.bind(store.log);
+  const tenants: string[] = [];
+  store.log.push = (...items) => {
+    for (const it of items) it[0] === "forTenant" ? tenants.push(it[1] as string) : push(it);
+    return store.log.length;
+  };
   const pushed: Array<[string, CloudMessage]> = [];
   const deps = { store, push: async (c: string, m: CloudMessage) => void pushed.push([c, m]), now: () => 1_000 } as unknown as WsDeps;
   const send = async (message: MachineMessage, connectionId = "conn-mini", order?: number[]) => {
@@ -42,7 +53,7 @@ function setup() {
     for (const i of seq) last = await handleEvent({ requestContext: { routeKey: "$default", connectionId }, body: JSON.stringify(frames[i]) }, deps);
     return last;
   };
-  return { store, pushed, deps, send };
+  return { store, pushed, deps, send, tenants };
 }
 
 const hello: MachineMessage = {
@@ -52,15 +63,18 @@ const hello: MachineMessage = {
 
 describe("machine channel", () => {
   it("binds the connection to the machine the authorizer verified", async () => {
-    const { store, deps } = setup();
-    const r = await handleEvent({ requestContext: { routeKey: "$connect", connectionId: "c9", authorizer: { machine: "mini", kid: "k1" } } }, deps);
+    const { store, deps, tenants } = setup();
+    const uid = "c".repeat(20);
+    const r = await handleEvent({ requestContext: { routeKey: "$connect", connectionId: "c9", authorizer: { uid, machine: "mini", kid: "k1" } } }, deps);
     expect(r).toMatchObject({ statusCode: 200 });
     expect(store.log[0]).toEqual(["bindConnection", "mini", "c9", "k1"]);
+    expect(tenants).toEqual([uid]);
   });
 
-  it("refuses a connect that did not come through the authorizer", async () => {
+  it("refuses a connect that did not come through the authorizer, or that carries no account", async () => {
     const { deps } = setup();
     expect(await handleEvent({ requestContext: { routeKey: "$connect", connectionId: "c9" } }, deps)).toMatchObject({ statusCode: 401 });
+    expect(await handleEvent({ requestContext: { routeKey: "$connect", connectionId: "c9", authorizer: { machine: "mini", kid: "k1" } } }, deps)).toMatchObject({ statusCode: 401 });
   });
 
   it("replaces the catalog on hello and answers welcome", async () => {
@@ -80,6 +94,12 @@ describe("machine channel", () => {
     const { store, send } = setup();
     expect(await send({ type: "ack", callId: "c1" }, "conn-stranger")).toMatchObject({ statusCode: 403 });
     expect(store.log).toHaveLength(0);
+  });
+
+  it("handles every message inside the account the connection authenticated as", async () => {
+    const { send, tenants } = setup();
+    await send({ type: "ack", callId: "c1" });
+    expect(tenants).toEqual(["a".repeat(20)]);
   });
 
   it("attributes a result to the connection's machine, not to anything in the message", async () => {

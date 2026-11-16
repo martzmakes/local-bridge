@@ -111,6 +111,23 @@ function textOf(content: Array<Record<string, unknown>>): string {
   return out;
 }
 
+export function createTransport(config: ServerConfig, stdioStderr: "ignore" | "inherit" = "ignore"): Transport {
+  if (config.transport === "stdio") {
+    return new StdioClientTransport({
+      command: config.command,
+      args: config.args,
+      // The SDK merges this over a short list of safe inherited variables.
+      ...(config.env ? { env: config.env } : {}),
+      ...(config.cwd ? { cwd: config.cwd } : {}),
+      stderr: stdioStderr,
+    });
+  }
+  const requestInit: RequestInit = config.headers ? { headers: config.headers } : {};
+  return config.transport === "sse"
+    ? new SSEClientTransport(new URL(config.url), { requestInit })
+    : new StreamableHTTPClientTransport(new URL(config.url), { requestInit });
+}
+
 export class ServerManager implements ToolRunner {
   private readonly states = new Map<string, ServerState>();
   private readonly listeners = new Set<() => void>();
@@ -137,6 +154,8 @@ export class ServerManager implements ToolRunner {
     this.stdioStderr = opts.stdioStderr ?? "ignore";
     this.secrets = (opts.secrets ?? []).filter((s) => s.length >= 4);
     for (const [name, config] of Object.entries(servers)) {
+      // A disabled server does not exist as far as the cloud is concerned.
+      if (config.enabled === false) continue;
       this.states.set(name, {
         name,
         config,
@@ -177,6 +196,7 @@ export class ServerManager implements ToolRunner {
   list(): ServerInfo[] {
     return [...this.states.values()].map((s) => ({
       name: s.name,
+      ...(s.config.title ? { title: s.config.title } : {}),
       status: s.status,
       ...(s.error && s.status === "down" ? { error: s.error } : {}),
       // A server that is down has its tools withheld.
@@ -223,23 +243,6 @@ export class ServerManager implements ToolRunner {
     return out.replace(/\s+/g, " ").slice(0, 300);
   }
 
-  private createTransport(config: ServerConfig): Transport {
-    if (config.transport === "stdio") {
-      return new StdioClientTransport({
-        command: config.command,
-        args: config.args,
-        // The SDK merges this over a short list of safe inherited variables.
-        ...(config.env ? { env: config.env } : {}),
-        ...(config.cwd ? { cwd: config.cwd } : {}),
-        stderr: this.stdioStderr,
-      });
-    }
-    const requestInit: RequestInit = config.headers ? { headers: config.headers } : {};
-    return config.transport === "sse"
-      ? new SSEClientTransport(new URL(config.url), { requestInit })
-      : new StreamableHTTPClientTransport(new URL(config.url), { requestInit });
-  }
-
   private async listTools(client: Client, config: ServerConfig): Promise<{ offered: string[]; tools: ToolInfo[] }> {
     const offered: string[] = [];
     const tools: ToolInfo[] = [];
@@ -274,7 +277,7 @@ export class ServerManager implements ToolRunner {
     };
     client.onerror = (err) => this.log.warn("server_error", { server: state.name, errorClass: errorClass(err) });
     try {
-      await client.connect(this.createTransport(state.config), { timeout: this.startTimeoutMs });
+      await client.connect(createTransport(state.config, this.stdioStderr), { timeout: this.startTimeoutMs });
       const { offered, tools } = await this.listTools(client, state.config);
       if (closed) throw new Error("server exited during startup");
       if (this.stopped || generation !== state.generation) {

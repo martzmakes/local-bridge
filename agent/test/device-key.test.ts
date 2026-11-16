@@ -35,6 +35,21 @@ describe("device key", () => {
     }
   });
 
+  it("puts the account in the assertion as uid, and leaves the claim out when there is none", async () => {
+    const fake = fakeSecurity();
+    const { jwk } = await new DeviceKey(fake.keychain, "mini").ensure();
+    const publicKey = await importJWK({ kty: jwk.kty, crv: jwk.crv, x: jwk.x }, "EdDSA");
+
+    const withAccount = await new DeviceKey(fake.keychain, "mini", { account: "0123456789abcdef0123" }).signAssertion();
+    expect(decodeProtectedHeader(withAccount)).toEqual({ alg: "EdDSA", kid: jwk.kid, typ: "JWT" });
+    const { payload } = await jwtVerify(withAccount, publicKey, { audience: DEVICE_AUDIENCE, issuer: "mini", subject: "mini" });
+    expect(payload.uid).toBe("0123456789abcdef0123");
+    expect(Object.keys(payload).sort()).toEqual(["aud", "exp", "iat", "iss", "jti", "sub", "uid"]);
+
+    const without = await new DeviceKey(fake.keychain, "mini").signAssertion();
+    expect((await jwtVerify(without, publicKey)).payload).not.toHaveProperty("uid");
+  });
+
   it("signs an assertion that verifies with the public JWK and carries the agreed claims", async () => {
     const fake = fakeSecurity();
     const now = 1_800_000_000_000;

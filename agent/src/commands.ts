@@ -1,7 +1,8 @@
-// CLI commands: init, pubkey, rotate-key, doctor, run.
-import { ConfigError, defaultConfigPath, loadConfig, resolveSecrets, type Config } from "./config";
+// CLI commands: init, pubkey, rotate-key, doctor, inspect, run.
+import { ConfigError, NO_ACCOUNT_MESSAGE, defaultConfigPath, loadConfig, resolveSecrets, type Config } from "./config";
 import { runDaemon } from "./daemon";
 import { DeviceKey, type PublicDeviceJwk } from "./device-key";
+import { inspectFromText } from "./inspect";
 import { Keychain } from "./keychain";
 import { formatTable, kindOf, permissionRows } from "./permissions";
 import { ServerManager } from "./servers";
@@ -14,17 +15,36 @@ export interface CliDeps {
   out?: (line: string) => void;
   keychain?: Keychain;
   env?: NodeJS.ProcessEnv;
+  /** Reads all of stdin; `inspect` takes its server object from it. */
+  readStdin?: () => Promise<string>;
+  /** Overrides inspect's 20 s limit in tests. */
+  inspectTimeoutMs?: number;
+}
+
+const MAX_STDIN_BYTES = 1_048_576;
+
+async function readAllStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const buf = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
+    size += buf.length;
+    if (size > MAX_STDIN_BYTES) throw new Error("stdin is too large");
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 const USAGE = `local-bridge-agent ${AGENT_VERSION}
 
 Usage: local-bridge-agent <command> [--config <path>] [--machine <name>] [--verbose]
 
-  init         Generate and store the device key if there is none; print the public JWK
+  init         Generate and store the device key if there is none; print the public JWK (one JSON line)
   pubkey       Print the public JWK of the device key
   rotate-key   Generate a pending key; the running agent announces it to the cloud
   doctor       Check config, key, each local server and the permissions they need
-  run          Run the agent in the foreground (what the LaunchAgent does)
+  inspect      Read one server object (JSON) on stdin, start it, print its tools as one JSON line
+  run          Run the agent in the foreground (what the macOS app does)
 
 --machine is only needed by init and pubkey before a config file exists.`;
 
@@ -69,10 +89,6 @@ function publicJson(jwk: PublicDeviceJwk): string {
   return JSON.stringify({ kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: jwk.kid });
 }
 
-function registerLine(machine: string, jwk: PublicDeviceJwk): string {
-  return `npx ts-node scripts/admin.ts device register ${machine} '${publicJson(jwk)}'`;
-}
-
 export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number | undefined> {
   const out = deps.out ?? ((line: string) => process.stdout.write(line + "\n"));
   const keychain = deps.keychain ?? new Keychain();
@@ -82,14 +98,10 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   switch (args.command) {
     case "init": {
       const machine = await machineName(args, configPath);
-      const { jwk, created } = await new DeviceKey(keychain, machine).ensure();
-      out(created ? `Generated a device key for "${machine}" and stored it in the login Keychain.` : `A device key for "${machine}" already exists; nothing was changed.`);
-      out("");
-      out("Public key (JWK):");
+      // Creates the key only if there is none. The app registers the public half over the account API,
+      // so stdout is the JWK and nothing else.
+      const { jwk } = await new DeviceKey(keychain, machine).ensure();
       out(publicJson(jwk));
-      out("");
-      out("Register it from the infra/ directory on the admin machine:");
-      out(registerLine(machine, jwk));
       return 0;
     }
     case "pubkey": {
@@ -119,8 +131,24 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
     }
     case "doctor":
       return doctor(configPath, keychain, out, args.verbose);
+    case "inspect": {
+      // Exactly one JSON line on stdout, whatever happens; needs no config file.
+      let text: string;
+      try {
+        text = await (deps.readStdin ?? readAllStdin)();
+      } catch {
+        out(JSON.stringify({ ok: false, error: "could not read stdin" }));
+        return 1;
+      }
+      const result = await inspectFromText(text, {
+        keychain,
+        ...(deps.inspectTimeoutMs !== undefined ? { timeoutMs: deps.inspectTimeoutMs } : {}),
+      });
+      out(JSON.stringify(result));
+      return result.ok ? 0 : 1;
+    }
     case "run":
-      await runDaemon(configPath);
+      await runDaemon(configPath, { keychain, ...(deps.env ? { env: deps.env } : {}) });
       return undefined; // keeps running
     case "help":
     case undefined:
@@ -168,6 +196,9 @@ async function doctor(configPath: string, keychain: Keychain, out: (line: string
   try {
     config = await loadConfig(configPath);
     ok(`${configPath}: machine "${config.machine}", endpoint ${config.endpoint}, ${Object.keys(config.servers).length} server(s)`);
+    ok(`public base ${config.publicBase}`);
+    if (config.account) ok(`account ${config.account}`);
+    else bad(`no account: ${NO_ACCOUNT_MESSAGE}`);
   } catch (err) {
     bad(err instanceof Error ? err.message : String(err));
     return 1;
@@ -202,6 +233,9 @@ async function doctor(configPath: string, keychain: Keychain, out: (line: string
   out("");
   out("Servers");
   const manager = new ServerManager(resolved.servers, { secrets, stdioStderr: verbose ? "inherit" : "ignore" });
+  for (const [name, server] of Object.entries(resolved.servers)) {
+    if (!server.enabled) out(`  off   ${name}: disabled in the config (not started, not announced)`);
+  }
   try {
     await manager.start();
     for (const report of manager.report()) {

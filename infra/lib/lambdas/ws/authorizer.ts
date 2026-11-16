@@ -29,13 +29,13 @@ export const handler = async (event: AuthorizerEvent) => {
   }
   const store = getStore();
   const result = await verifyDeviceAssertion(match[1], {
-    getMachine: (id) => store.getMachine(id),
+    getMachine: (uid, id) => store.forTenant(uid).getMachine(id),
     claimJti: (jti) => store.claimJti(jti),
   });
   if (!result.ok) {
     logEvent("device_auth_denied", { reason: result.reason });
     return policy("anonymous", "Deny", event.methodArn);
   }
-  logEvent("device_auth_ok", { machine: result.machine, kid: result.kid });
-  return policy(result.machine, "Allow", event.methodArn, { machine: result.machine, kid: result.kid });
+  logEvent("device_auth_ok", { uid: result.uid, machine: result.machine, kid: result.kid });
+  return policy(`${result.uid}/${result.machine}`, "Allow", event.methodArn, { uid: result.uid, machine: result.machine, kid: result.kid });
 };

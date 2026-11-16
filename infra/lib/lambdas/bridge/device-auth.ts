@@ -4,15 +4,17 @@
 import { decodeJwt, decodeProtectedHeader, importJWK, jwtVerify } from "jose";
 import { DEVICE_ASSERTION_TTL_SECONDS, DEVICE_AUDIENCE, NAME_RE } from "../../shared/protocol";
 import type { DeviceKey, MachineMeta } from "./store";
+import { isUid } from "./tenant";
 
 export interface DeviceAuthDeps {
-  getMachine(id: string): Promise<MachineMeta | null>;
+  /** The machine `id` registered in account `uid`, if any. */
+  getMachine(uid: string, id: string): Promise<MachineMeta | null>;
   claimJti(jti: string): Promise<boolean>;
   now?: () => number;
 }
 
 export type DeviceAuthResult =
-  | { ok: true; machine: string; kid: string }
+  | { ok: true; uid: string; machine: string; kid: string }
   | { ok: false; reason: string };
 
 export function activeKeys(keys: DeviceKey[], now: number): DeviceKey[] {
@@ -22,6 +24,7 @@ export function activeKeys(keys: DeviceKey[], now: number): DeviceKey[] {
 export async function verifyDeviceAssertion(token: string, deps: DeviceAuthDeps): Promise<DeviceAuthResult> {
   const now = (deps.now ?? Date.now)();
   let machineId: string;
+  let uid: string;
   let kid: string | undefined;
   try {
     const header = decodeProtectedHeader(token);
@@ -30,12 +33,16 @@ export async function verifyDeviceAssertion(token: string, deps: DeviceAuthDeps)
     const claims = decodeJwt(token);
     if (typeof claims.iss !== "string" || !NAME_RE.test(claims.iss)) return { ok: false, reason: "bad_issuer" };
     machineId = claims.iss;
+    // The account is only a hint for which key to check: the signature below
+    // has to verify against a key registered under exactly this account.
+    if (!isUid(claims.uid)) return { ok: false, reason: "no_account" };
+    uid = claims.uid;
   } catch {
     return { ok: false, reason: "malformed" };
   }
   if (!kid) return { ok: false, reason: "no_kid" };
 
-  const machine = await deps.getMachine(machineId);
+  const machine = await deps.getMachine(uid, machineId);
   if (!machine) return { ok: false, reason: "unknown_machine" };
   if (!machine.enabled) return { ok: false, reason: "machine_disabled" };
   const key = activeKeys(machine.keys, now).find((k) => k.kid === kid);
@@ -59,11 +66,11 @@ export async function verifyDeviceAssertion(token: string, deps: DeviceAuthDeps)
     if (typeof payload.jti !== "string" || payload.jti.length < 16 || payload.jti.length > 64) {
       return { ok: false, reason: "bad_jti" };
     }
-    if (!(await deps.claimJti(`${machineId}:${payload.jti}`))) return { ok: false, reason: "replayed" };
+    if (!(await deps.claimJti(`${uid}:${machineId}:${payload.jti}`))) return { ok: false, reason: "replayed" };
   } catch {
     return { ok: false, reason: "bad_signature_or_claims" };
   }
-  return { ok: true, machine: machineId, kid };
+  return { ok: true, uid, machine: machineId, kid };
 }
 
 /**

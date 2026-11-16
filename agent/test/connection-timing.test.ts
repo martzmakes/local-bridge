@@ -64,12 +64,12 @@ class FakeSocket implements SocketLike {
   readyState = 0;
   sent: MachineMessage[] = [];
   closedWith: number | "terminated" | undefined;
-  private readonly handlers = new Map<string, Array<(arg?: any) => void>>();
+  private readonly handlers = new Map<string, Array<(...args: any[]) => void>>();
   private readonly partial = new Map<string, string[]>();
 
   constructor(readonly url: string, readonly headers: Record<string, string>) {}
 
-  on(event: string, listener: (arg?: any) => void): this {
+  on(event: string, listener: (...args: any[]) => void): this {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), listener]);
     return this;
   }

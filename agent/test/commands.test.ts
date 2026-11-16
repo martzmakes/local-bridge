@@ -33,19 +33,22 @@ describe("cli", () => {
     return { code, text: lines.join("\n"), fake };
   };
 
-  it("init stores a key once and prints the JWK and the register command", async () => {
+  it("init stores a key once and prints only the public JWK, as one JSON line", async () => {
     const first = await run(["init"]);
     expect(first.code).toBe(0);
     expect(first.fake.store.has(first.fake.key(DEVICE_KEY_SERVICE, "mini"))).toBe(true);
-    const jwkLine = first.text.split("\n").find((l) => l.startsWith('{"kty"'))!;
+    const jwkLine = first.text;
+    expect(jwkLine).not.toContain("\n");
     const jwk = JSON.parse(jwkLine) as Record<string, string>;
     expect(Object.keys(jwk)).toEqual(["kty", "crv", "x", "kid"]);
-    expect(first.text).toContain(`admin.ts device register mini '${jwkLine}'`);
+    expect(first.text).not.toContain("admin.ts");
     expect(first.text).not.toContain('"d"');
 
+    // A second init changes nothing and prints the same line.
+    const stored = first.fake.store.get(first.fake.key(DEVICE_KEY_SERVICE, "mini"));
     const again = await run(["init"], first.fake);
-    expect(again.text).toContain("already exists");
-    expect(again.text).toContain(jwkLine);
+    expect(again.text).toBe(jwkLine);
+    expect(first.fake.store.get(first.fake.key(DEVICE_KEY_SERVICE, "mini"))).toBe(stored);
     const pub = await run(["pubkey"], first.fake);
     expect(pub.text).toBe(jwkLine);
   });
@@ -56,7 +59,8 @@ describe("cli", () => {
     const code = await runCli(["init", "--machine", "air", "--config", join(dir, "missing.json")], { out: (l) => lines.push(l), keychain: fake.keychain });
     expect(code).toBe(0);
     expect(fake.store.has(fake.key(DEVICE_KEY_SERVICE, "air"))).toBe(true);
-    expect(lines.join("\n")).toContain("device register air ");
+    expect(lines).toHaveLength(1);
+    expect(Object.keys(JSON.parse(lines[0]!) as object)).toEqual(["kty", "crv", "x", "kid"]);
     await expect(runCli(["init", "--config", join(dir, "missing.json")], { out: () => {}, keychain: fake.keychain })).rejects.toThrow(/--machine/);
   });
 
@@ -81,6 +85,7 @@ describe("cli", () => {
     const r = await run(["doctor"], init.fake);
     expect(r.code).toBe(1); // the "gone" server cannot start
     expect(r.text).toMatch(/ok\s+.*machine "mini"/);
+    expect(r.text).toMatch(/FAIL\s+no account: this Mac is not signed in to an account; open the Local Bridge app and sign in/);
     expect(r.text).toMatch(/ok\s+present in the Keychain, kid [0-9a-f]{16}/);
     expect(r.text).toMatch(/ok\s+notes: up, 3 tool\(s\) exposed/);
     expect(r.text).toMatch(/read\s+echo/);
@@ -104,10 +109,72 @@ describe("cli", () => {
     expect(lines.join("\n")).toMatch(/FAIL.*readable by group or others/);
   }, 30_000);
 
+  it("inspect prints exactly one JSON line and exits 0, without needing a config file", async () => {
+    const lines: string[] = [];
+    const code = await runCli(["inspect", "--config", join(dir, "missing.json")], {
+      out: (l) => lines.push(l),
+      keychain: fakeSecurity().keychain,
+      readStdin: async () => JSON.stringify({ transport: "stdio", command: process.execPath, args: [FIXTURE] }),
+    });
+    expect(code).toBe(0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain("\n");
+    const parsed = JSON.parse(lines[0]!) as { ok: boolean; tools: Array<{ name: string }> };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.tools.map((t) => t.name)).toContain("hidden");
+  });
+
+  it("inspect exits 1 with ok:false for bad input, a server that cannot start, and unreadable stdin", async () => {
+    const inspect = async (readStdin: () => Promise<string>) => {
+      const lines: string[] = [];
+      const code = await runCli(["inspect"], { out: (l) => lines.push(l), keychain: fakeSecurity().keychain, readStdin });
+      expect(lines).toHaveLength(1);
+      return { code, result: JSON.parse(lines[0]!) as { ok: boolean; error?: string } };
+    };
+    expect(await inspect(async () => "not json")).toEqual({ code: 1, result: { ok: false, error: "invalid server: stdin is not JSON" } });
+    expect(await inspect(async () => JSON.stringify({ transport: "stdio", command: "/nonexistent/server" }))).toEqual({
+      code: 1,
+      result: { ok: false, error: "could not start: ENOENT" },
+    });
+    expect(
+      await inspect(async () => {
+        throw new Error("closed");
+      }),
+    ).toEqual({ code: 1, result: { ok: false, error: "could not read stdin" } });
+  });
+
+  it("doctor says which servers are disabled and does not start them", async () => {
+    const off = join(dir, "off.json");
+    await writeFile(
+      off,
+      JSON.stringify({
+        machine: "mini",
+        endpoint: "wss://bridge-ws.martzmakes.com",
+        account: "0123456789abcdef0123",
+        servers: {
+          notes: { transport: "stdio", command: process.execPath, args: [FIXTURE], read: ["echo"], write: [] },
+          parked: { enabled: false, transport: "stdio", command: "/nonexistent/server", read: ["x"], write: [] },
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const fake = fakeSecurity();
+    const lines: string[] = [];
+    await runCli(["init", "--config", off], { out: () => {}, keychain: fake.keychain });
+    const code = await runCli(["doctor", "--config", off], { out: (l) => lines.push(l), keychain: fake.keychain });
+    const text = lines.join("\n");
+    expect(code).toBe(0);
+    expect(text).toMatch(/off\s+parked: disabled/);
+    expect(text).not.toMatch(/FAIL/);
+    expect(text).toContain("public base https://bridge.martzmakes.com");
+    expect(text).toMatch(/ok\s+account 0123456789abcdef0123/);
+  }, 30_000);
+
   it("prints usage for help and rejects unknown commands", async () => {
     const lines: string[] = [];
     expect(await runCli(["--help"], { out: (l) => lines.push(l) })).toBe(0);
     expect(lines.join("\n")).toContain("rotate-key");
+    expect(lines.join("\n")).toContain("inspect");
     await expect(runCli(["frobnicate"], { out: () => {} })).rejects.toThrow(/unknown command/);
   });
 });

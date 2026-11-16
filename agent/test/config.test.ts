@@ -27,6 +27,52 @@ describe("config schema", () => {
     expect(c.servers.ha).toMatchObject({ transport: "sse", concurrency: 1, write: [] });
   });
 
+  it("still loads a config written before title, enabled and publicBase existed", () => {
+    const c = parseConfig(valid);
+    expect(c.publicBase).toBe("https://bridge.martzmakes.com");
+    expect(c.servers.notes!.enabled).toBe(true);
+    expect(c.servers.notes!.title).toBeUndefined();
+    expect(c.servers.ha!.enabled).toBe(true);
+  });
+
+  it("accepts title, enabled and publicBase, and checks them", () => {
+    const a = clone();
+    a.publicBase = "https://bridge.example.com";
+    a.servers.notes.title = "Apple Notes";
+    a.servers.notes.enabled = false;
+    a.servers.ha.title = "x".repeat(64);
+    const c = parseConfig(a);
+    expect(c.publicBase).toBe("https://bridge.example.com");
+    expect(c.servers.notes).toMatchObject({ title: "Apple Notes", enabled: false });
+    expect(c.servers.ha).toMatchObject({ title: "x".repeat(64), enabled: true });
+
+    for (const bad of ["http://bridge.example.com", "bridge.example.com", "", 5]) {
+      const b = clone();
+      b.publicBase = bad;
+      expect(() => parseConfig(b)).toThrow(ConfigError);
+    }
+    for (const bad of ["", "x".repeat(65), 5]) {
+      const b = clone();
+      b.servers.notes.title = bad;
+      expect(() => parseConfig(b)).toThrow(ConfigError);
+    }
+    const d = clone();
+    d.servers.notes.enabled = "no";
+    expect(() => parseConfig(d)).toThrow(ConfigError);
+  });
+
+  it("takes an optional account of 20 lowercase hex characters", () => {
+    expect(parseConfig(valid).account).toBeUndefined();
+    const a = clone();
+    a.account = "0123456789abcdef0123";
+    expect(parseConfig(a).account).toBe("0123456789abcdef0123");
+    for (const bad of ["", "0123456789abcdef012", "0123456789abcdef01234", "0123456789ABCDEF0123", "0123456789abcdefghij", 5, null]) {
+      const b = clone();
+      b.account = bad;
+      expect(() => parseConfig(b)).toThrow(ConfigError);
+    }
+  });
+
   it("rejects bad machine and server names", () => {
     const a = clone();
     a.machine = "Mini";
@@ -144,5 +190,15 @@ describe("keychain references", () => {
   it("fails clearly when the item is missing", async () => {
     const fake = fakeSecurity();
     await expect(resolveSecrets(parseConfig(valid), fake.keychain)).rejects.toThrow(/local-bridge\.ha-token.*not found/);
+  });
+
+  it("does not look up Keychain values for a disabled server", async () => {
+    const fake = fakeSecurity();
+    const input = clone();
+    input.servers.ha.enabled = false;
+    const { config, secrets } = await resolveSecrets(parseConfig(input), fake.keychain);
+    expect(secrets).toEqual([]);
+    expect(config.servers.ha).toMatchObject({ headers: { Authorization: "keychain:local-bridge.ha-token" } });
+    expect(fake.calls).toEqual([]);
   });
 });

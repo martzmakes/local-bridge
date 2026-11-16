@@ -13,6 +13,10 @@ const ToolName = z.string().min(1).max(128);
 const ToolList = z.array(ToolName).max(500).default([]);
 
 const exposure = {
+  /** Shown to MCP clients and in the macOS app. */
+  title: z.string().min(1).max(64).optional(),
+  /** false: the server is not started, not announced, and calls to it are `not_exposed`. */
+  enabled: z.boolean().default(true),
   read: ToolList,
   write: ToolList,
   /** Calls run at once against this server. AppleScript-backed servers want 1. */
@@ -60,9 +64,26 @@ const Endpoint = z.string().refine((v) => {
   }
 }, "must be a wss:// URL (ws:// is accepted for localhost only)");
 
+export const DEFAULT_PUBLIC_BASE = "https://bridge.martzmakes.com";
+
+const PublicBase = z.string().refine((v) => {
+  try {
+    return new URL(v).protocol === "https:";
+  } catch {
+    return false;
+  }
+}, "must be an https:// URL");
+
+export const ACCOUNT_RE = /^[a-f0-9]{20}$/;
+export const NO_ACCOUNT_MESSAGE = "this Mac is not signed in to an account; open the Local Bridge app and sign in";
+
 export const ConfigSchema = z.strictObject({
   machine: Name,
   endpoint: Endpoint,
+  /** The account this Mac belongs to (mac-app spec section 9); the app writes it after sign-in. `run` needs it. */
+  account: z.string().regex(ACCOUNT_RE, "must be 20 lowercase hex characters").optional(),
+  /** Where MCP clients reach the bridge. The agent never connects to it; the app shows endpoint URLs from it. */
+  publicBase: PublicBase.default(DEFAULT_PUBLIC_BASE),
   servers: z
     .record(z.string(), ServerConfigSchema)
     .refine((s) => Object.keys(s).every((k) => NAME_RE.test(k)), "server names must match [a-z0-9]{1,16}")
@@ -120,9 +141,8 @@ export interface ResolvedConfig {
   secrets: string[];
 }
 
-/** Replaces every `keychain:<service>` value in server env and headers. */
-export async function resolveSecrets(config: Config, keychain: Keychain): Promise<ResolvedConfig> {
-  const secrets: string[] = [];
+/** Replaces every `keychain:<service>` value in one server's env or headers. Resolved values are appended to `secrets`. */
+export async function resolveServerSecrets(server: ServerConfig, keychain: Keychain, secrets: string[] = []): Promise<ServerConfig> {
   const resolveMap = async (map: Record<string, string> | undefined): Promise<Record<string, string> | undefined> => {
     if (!map) return map;
     const out: Record<string, string> = {};
@@ -137,12 +157,18 @@ export async function resolveSecrets(config: Config, keychain: Keychain): Promis
     }
     return out;
   };
+  return server.transport === "stdio"
+    ? { ...server, env: await resolveMap(server.env) }
+    : { ...server, headers: await resolveMap(server.headers) };
+}
+
+/** Replaces every `keychain:<service>` value in server env and headers. Disabled servers are left alone. */
+export async function resolveSecrets(config: Config, keychain: Keychain): Promise<ResolvedConfig> {
+  const secrets: string[] = [];
   const servers: Config["servers"] = {};
   for (const [name, server] of Object.entries(config.servers)) {
-    servers[name] =
-      server.transport === "stdio"
-        ? { ...server, env: await resolveMap(server.env) }
-        : { ...server, headers: await resolveMap(server.headers) };
+    // A disabled server is never started, so a missing Keychain item for it must not stop the agent.
+    servers[name] = server.enabled ? await resolveServerSecrets(server, keychain, secrets) : server;
   }
   return { config: { ...config, servers }, secrets };
 }

@@ -1,107 +1,14 @@
 // Integration: the real Connection and ServerManager against a local `ws`
 // server that plays the cloud. Nothing leaves 127.0.0.1.
-import type { IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
 import { decodeProtectedHeader, importJWK, jwtVerify } from "jose";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import WebSocket, { WebSocketServer } from "ws";
-import {
-  DEVICE_AUDIENCE,
-  FrameSchema,
-  HelloSchema,
-  PROTOCOL_VERSION,
-  decodeFrames,
-  type MachineMessage,
-} from "../../infra/lib/shared/protocol";
+import { DEVICE_AUDIENCE, HelloSchema, PROTOCOL_VERSION } from "../../infra/lib/shared/protocol";
 import { Connection, type ConnectionOptions } from "../src/connection";
 import { DeviceKey, type PublicDeviceJwk } from "../src/device-key";
 import { ServerManager } from "../src/servers";
+import { FakeCloud, resultFor, sendCall, type Session } from "./fake-cloud";
 import { capturingLogger, fakeSecurity, fixtureServer, waitFor } from "./helpers";
 
-interface Session {
-  socket: WebSocket;
-  authorization: string | undefined;
-  /** Decoded machine messages, in arrival order. */
-  messages: MachineMessage[];
-  /** Byte length of every raw ws message, and how many frames each message used. */
-  rawSizes: number[];
-  frameCounts: Map<MachineMessage, number>;
-  closed: boolean;
-}
-
-/** A stand-in for the WebSocket API + device Lambda: reassembles frames, records everything. */
-class FakeCloud {
-  readonly sessions: Session[] = [];
-  private readonly wss: WebSocketServer;
-
-  private constructor(wss: WebSocketServer) {
-    this.wss = wss;
-    wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
-      const session: Session = {
-        socket,
-        authorization: req.headers.authorization,
-        messages: [],
-        rawSizes: [],
-        frameCounts: new Map(),
-        closed: false,
-      };
-      this.sessions.push(session);
-      const partial = new Map<string, string[]>();
-      socket.on("message", (data: Buffer) => {
-        session.rawSizes.push(data.length);
-        const frame = FrameSchema.parse(JSON.parse(data.toString("utf8")));
-        const parts = partial.get(frame.id) ?? [];
-        partial.set(frame.id, parts);
-        expect(frame.i).toBe(parts.length); // in order
-        parts.push(frame.d);
-        if (parts.length === frame.n) {
-          partial.delete(frame.id);
-          const message = decodeFrames(parts);
-          session.frameCounts.set(message, frame.n);
-          session.messages.push(message);
-        }
-      });
-      socket.on("close", () => (session.closed = true));
-      socket.send(JSON.stringify({ type: "welcome", machine: "mini", serverTime: Date.now() }));
-    });
-  }
-
-  static async start(): Promise<FakeCloud> {
-    const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve) => wss.once("listening", resolve));
-    return new FakeCloud(wss);
-  }
-
-  get url(): string {
-    return `ws://127.0.0.1:${(this.wss.address() as AddressInfo).port}`;
-  }
-
-  async session(index: number): Promise<Session> {
-    return waitFor(() => this.sessions[index], 10_000, `session ${index}`);
-  }
-
-  async stop(): Promise<void> {
-    for (const s of this.sessions) s.socket.terminate();
-    await new Promise<void>((resolve) => this.wss.close(() => resolve()));
-  }
-}
-
-function sendCall(session: Session, call: { callId: string; tool: string; server?: string; arguments?: Record<string, unknown>; deadline?: number; maxResultBytes?: number }): void {
-  session.socket.send(
-    JSON.stringify({
-      type: "call",
-      server: "fix",
-      arguments: {},
-      deadline: Date.now() + 10_000,
-      maxResultBytes: 262_144,
-      ...call,
-    }),
-  );
-}
-
-type Result = Extract<MachineMessage, { type: "result" }>;
-const resultFor = (session: Session, callId: string, timeoutMs = 10_000): Promise<Result> =>
-  waitFor(() => session.messages.find((m): m is Result => m.type === "result" && m.callId === callId), timeoutMs, `result ${callId}`);
 const hellos = (session: Session) => session.messages.filter((m) => m.type === "hello");
 
 describe("connection against a local cloud", () => {

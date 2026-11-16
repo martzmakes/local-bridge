@@ -176,3 +176,72 @@ Info.plist carries the usage strings macOS shows in its prompts (`NSAppleEventsU
 ## 8. Later
 
 Bundled, signed Node so nothing depends on Homebrew. Notarization and a DMG. Agents and rules pane backed by a narrow admin API instead of AWS credentials. Per-call confirmation for write tools as a notification from the app.
+
+## 9. Accounts (added the same evening, at Matt's direction)
+
+The app and the cloud are per user. Signing in to the app on several Macs with the same email puts all of those Macs in one account. A different user has a separate account and cannot see or reach anyone else's machines, servers, endpoints, agents or audit rows.
+
+### 9.1 Identity
+
+- A user is an email that completed the magic-link sign-in. The account id is `uid = first 20 hex characters of sha256(lowercased email)`. It is derived, so there is no user-to-account lookup to get wrong.
+- Who may sign in is still the `ALLOWED_EMAILS` gate in the stack **(my call)**. The system is multi-user; the door is opened by adding emails there. Opening it to anyone is a product decision (cost, abuse, support), not a default.
+- Every bridge JWT has `sub` = email; the tenant of a request is always derived from the verified token, never from the URL or the body.
+
+### 9.2 Tenancy in the data model
+
+Everything in `BridgeTable` that belonged to "the" owner is now keyed by account:
+
+| was | is |
+|---|---|
+| `AGENTS` | `AGENTS#<uid>` |
+| `MACHINES` | `MACHINES#<uid>` |
+| `RATE#<agent>` | `RATE#<uid>#<agent>` |
+| `AUDIT#<day>` | `AUDIT#<uid>#<day>` |
+| `CONN#<connectionId>` | unchanged key; carries `uid` and `machine` |
+| `CALL#<callId>` | unchanged key; carries `uid` and `machine`, and a result is accepted only from that account's machine |
+| `JTI#<machine>:<jti>` | `JTI#<uid>:<machine>:<jti>` |
+
+Machine names are per account: two users can each have a `mini`.
+
+### 9.3 Endpoints
+
+URLs do not change: `/mcp/<machine>/<server>` and `/mcp`. They resolve inside the account of the token that calls them. `mini/notes` with Matt's token is Matt's Notes; with another user's token it is that user's `mini`, or "not available". URLs carry no account id, so they reveal nothing and cannot be used to probe another account **(my call)**.
+
+### 9.4 The app signs in and registers its Mac
+
+This replaces `admin.ts device register`.
+
+1. First run: the app registers itself as an OAuth client (`POST /oauth/register`, redirect `localbridge://oauth/callback`) and keeps the client id.
+2. Sign in: the app opens the browser at `/oauth/authorize` with PKCE (`S256`), `state`, and `resource=<publicBase>/mcp`. The user enters their email and clicks the magic link; the browser is redirected to `localbridge://oauth/callback?code=…&state=…`, which opens the app. The app exchanges the code at `/oauth/token` and stores the access and refresh tokens in its own Keychain item. Refresh tokens rotate: store the new one from every refresh.
+3. The app runs `cli.mjs init` (creates the device key if missing) and `cli.mjs pubkey`, then registers this Mac.
+
+Account API, bearer token from a connector-style sign-in only (kind `oauth`), all under `/api`:
+
+| | |
+|---|---|
+| `GET /api/me` | `{ "email", "uid" }` |
+| `GET /api/machines` | `{ "machines": [{ "machine", "enabled", "connected", "lastSeen", "agentVersion", "kids": [], "servers": [{ "name", "title", "status", "tools": 4 }] }] }` |
+| `PUT /api/machines/<machine>` body `{ "jwk": { "kty":"OKP","crv":"Ed25519","x":"…" } }` | registers or replaces this account's key for that machine; returns `{ "uid", "machine", "kid" }` |
+| `DELETE /api/machines/<machine>` | removes the machine and its servers from the account; its open connection stops receiving calls |
+
+Errors are `{ "error": "<code>", "message": "…" }` with 400, 401, 404 or 409 (`machine_limit`: 10 machines per account).
+
+4. The app writes `"account": "<uid>"` into the daemon config and starts the daemon.
+
+### 9.5 Machine channel
+
+The device assertion gains a `uid` claim. The authorizer looks the key up under that account's machine; a valid signature for a machine name in another account does not match, because the key is not registered there. An assertion without `uid` is refused. `hello.machine` must still equal the machine the connection authenticated as.
+
+### 9.6 The app, added
+
+- Signed out: a sign-in screen and nothing else. No daemon runs.
+- Signed in: the account email in Settings with Sign out (stops the daemon, deletes the tokens; the device key stays) and a Machines list from `GET /api/machines` showing every Mac on the account, which one is this Mac, and Remove.
+- If the config has no `account`, or the cloud refuses the connection, the app re-registers the Mac itself instead of showing a command to paste.
+
+### 9.7 Release
+
+Signed and notarized the way Tower is (`~/dev/agent-mission-control/Scripts/release-mac.sh`): Developer ID Application (team EXAMPLETEAM), hardened runtime, secure timestamp, `notarytool submit --wait` with the App Store Connect API key when `~/.appstoreconnect/private_keys/AuthKey_<id>.p8` is present and otherwise the keychain profile `local-bridge-notary`, then `stapler staple`, `stapler validate` and `spctl --assess`. No Sparkle feed yet.
+
+### 9.8 Migration
+
+The `mini` row registered through the CLI on 2026-11-15 predates accounts and is deleted. The mini rejoins by signing in through the app. `admin.ts` and `mint.ts` take `--user <email>` and default to the first allowed email.

@@ -3,6 +3,7 @@
   "endpoint": "wss://bridge-ws.martzmakes.com",
   "servers": {
     "notes": {
+      "title": "Apple Notes",
       "transport": "stdio",
       "command": "/usr/local/bin/node",
       "args": ["/Users/example/dev/apple-notes-mcp/dist/index.js"],

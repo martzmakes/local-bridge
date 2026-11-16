@@ -1,16 +1,20 @@
 // DynamoDB access for BridgeTable. Spec section 9.
 //
-//   AGENTS    / <id>#META, <id>#RULE#<tool>
-//   MACHINES  / <id>#META, <id>#SERVER#<name>
-//   CONN#<connectionId> / META
-//   JTI#<jti> / META
+//   AGENTS#<uid>    / <id>#META, <id>#RULE#<tool>
+//   MACHINES#<uid>  / <id>#META, <id>#SERVER#<name>
+//   CONN#<connectionId> / META            (carries uid, machine, kid)
+//   JTI#<uid>:<machine>:<jti> / META
 //   FRAME#<connectionId>#<id> / <i>  (and DONE)
-//   CALL#<callId> / META, RES#<i>
-//   RATE#<agent> / M#<yyyymmddhhmm>, D#<yyyymmdd>
-//   AUDIT#<yyyy-mm-dd> / <iso ts>#<callId>
+//   CALL#<callId> / META, RES#<i>          (carries uid, machine)
+//   RATE#<uid>#<agent> / M#<yyyymmddhhmm>, D#<yyyymmdd>
+//   AUDIT#<uid>#<yyyy-mm-dd> / <iso ts>#<callId>
 //
-// Agents and machines each share one partition so the MCP Lambda reads an
-// agent with its rules, or the whole machine catalog, in a single Query.
+// A Store is bound to one account (forTenant). Everything an account owns is
+// under a partition key containing its uid, so one account's Store cannot
+// address another account's rows. Connection and call rows are looked up by
+// ids the cloud minted and carry the uid they belong to.
+// Within an account, agents and machines each share one partition so the MCP
+// Lambda reads an agent with its rules, or the whole catalog, in one Query.
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import {
   BatchWriteCommand,
@@ -90,6 +94,7 @@ export type CallStatus = "pending" | "acked" | "done" | "error" | "abandoned";
 
 export interface CallMeta {
   callId: string;
+  uid?: string;
   machine: string;
   agent: string;
   status: CallStatus;
@@ -110,8 +115,27 @@ export class Store {
   constructor(
     private ddb: DynamoDBDocumentClient,
     private table: string,
-    private now: () => number = Date.now
+    private now: () => number = Date.now,
+    /** Account this store reads and writes. Empty only for the id-keyed lookups (connection, frames). */
+    readonly tenant: string = ""
   ) {}
+
+  /** A store bound to one account. */
+  forTenant(uid: string): Store {
+    if (!/^[a-f0-9]{20}$/.test(uid)) throw new Error("invalid account id");
+    return new Store(this.ddb, this.table, this.now, uid);
+  }
+
+  private get agentsPk(): string {
+    return `AGENTS#${this.requireTenant()}`;
+  }
+  private get machinesPk(): string {
+    return `MACHINES#${this.requireTenant()}`;
+  }
+  private requireTenant(): string {
+    if (!this.tenant) throw new Error("store is not bound to an account");
+    return this.tenant;
+  }
 
   private ttl(seconds: number): number {
     return Math.floor(this.now() / 1000) + seconds;
@@ -124,7 +148,7 @@ export class Store {
       new QueryCommand({
         TableName: this.table,
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :p)",
-        ExpressionAttributeValues: { ":pk": "AGENTS", ":p": `${id}#` },
+        ExpressionAttributeValues: { ":pk": this.agentsPk, ":p": `${id}#` },
       })
     );
     const items = res.Items ?? [];
@@ -145,24 +169,24 @@ export class Store {
       new QueryCommand({
         TableName: this.table,
         KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": "AGENTS" },
+        ExpressionAttributeValues: { ":pk": this.agentsPk },
       })
     );
     return (res.Items ?? []).filter((i) => String(i.sk).endsWith("#META")).map((i) => i.meta as AgentMeta);
   }
 
   async putAgent(meta: AgentMeta): Promise<void> {
-    await this.ddb.send(new PutCommand({ TableName: this.table, Item: { pk: "AGENTS", sk: `${meta.id}#META`, meta } }));
+    await this.ddb.send(new PutCommand({ TableName: this.table, Item: { pk: this.agentsPk, sk: `${meta.id}#META`, meta } }));
   }
 
   async putRule(agent: string, rule: Rule): Promise<void> {
     await this.ddb.send(
-      new PutCommand({ TableName: this.table, Item: { pk: "AGENTS", sk: `${agent}#RULE#${rule.tool}`, rule } })
+      new PutCommand({ TableName: this.table, Item: { pk: this.agentsPk, sk: `${agent}#RULE#${rule.tool}`, rule } })
     );
   }
 
   async deleteRule(agent: string, tool: string): Promise<void> {
-    await this.ddb.send(new DeleteCommand({ TableName: this.table, Key: { pk: "AGENTS", sk: `${agent}#RULE#${tool}` } }));
+    await this.ddb.send(new DeleteCommand({ TableName: this.table, Key: { pk: this.agentsPk, sk: `${agent}#RULE#${tool}` } }));
   }
 
   // ---- machines -----------------------------------------------------------
@@ -172,7 +196,7 @@ export class Store {
       new QueryCommand({
         TableName: this.table,
         KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": "MACHINES" },
+        ExpressionAttributeValues: { ":pk": this.machinesPk },
         ConsistentRead: true,
       })
     );
@@ -197,7 +221,7 @@ export class Store {
 
   async getMachine(id: string): Promise<MachineMeta | null> {
     const res = await this.ddb.send(
-      new GetCommand({ TableName: this.table, Key: { pk: "MACHINES", sk: `${id}#META` }, ConsistentRead: true })
+      new GetCommand({ TableName: this.table, Key: { pk: this.machinesPk, sk: `${id}#META` }, ConsistentRead: true })
     );
     if (!res.Item) return null;
     return { ...(res.Item.meta as MachineMeta), ...liveFields(res.Item) };
@@ -208,7 +232,7 @@ export class Store {
     await this.ddb.send(
       new UpdateCommand({
         TableName: this.table,
-        Key: { pk: "MACHINES", sk: `${id}#META` },
+        Key: { pk: this.machinesPk, sk: `${id}#META` },
         UpdateExpression: "SET meta = :meta",
         ExpressionAttributeValues: { ":meta": { id, enabled, keys } },
       })
@@ -220,13 +244,13 @@ export class Store {
     await this.ddb.send(
       new PutCommand({
         TableName: this.table,
-        Item: { pk: `CONN#${connectionId}`, sk: "META", machine, kid, connectedAt: now, ttl: this.ttl(3 * 3600) },
+        Item: { pk: `CONN#${connectionId}`, sk: "META", uid: this.requireTenant(), machine, kid, connectedAt: now, ttl: this.ttl(3 * 3600) },
       })
     );
     await this.ddb.send(
       new UpdateCommand({
         TableName: this.table,
-        Key: { pk: "MACHINES", sk: `${machine}#META` },
+        Key: { pk: this.machinesPk, sk: `${machine}#META` },
         UpdateExpression: "SET connectionId = :c, connectedAt = :n, lastSeenAt = :n",
         ConditionExpression: "attribute_exists(meta)",
         ExpressionAttributeValues: { ":c": connectionId, ":n": now },
@@ -234,28 +258,29 @@ export class Store {
     );
   }
 
-  async connection(connectionId: string): Promise<{ machine: string; kid?: string } | null> {
+  /** Which account and machine a connection belongs to. Works on an unbound store. */
+  async connection(connectionId: string): Promise<{ uid: string; machine: string; kid?: string } | null> {
     const res = await this.ddb.send(
       new GetCommand({ TableName: this.table, Key: { pk: `CONN#${connectionId}`, sk: "META" }, ConsistentRead: true })
     );
-    if (!res.Item || typeof res.Item.machine !== "string") return null;
-    return { machine: res.Item.machine, kid: res.Item.kid as string | undefined };
+    if (!res.Item || typeof res.Item.machine !== "string" || typeof res.Item.uid !== "string") return null;
+    return { uid: res.Item.uid, machine: res.Item.machine, kid: res.Item.kid as string | undefined };
   }
 
-  async connectionMachine(connectionId: string): Promise<string | null> {
-    return (await this.connection(connectionId))?.machine ?? null;
-  }
+
 
   /** Removes the connection. Clears the machine's connectionId only if it is still this one. */
   async unbindConnection(connectionId: string): Promise<void> {
-    const machine = await this.connectionMachine(connectionId);
+    const conn = await this.connection(connectionId);
     await this.ddb.send(new DeleteCommand({ TableName: this.table, Key: { pk: `CONN#${connectionId}`, sk: "META" } }));
-    if (!machine) return;
+    if (!conn) return;
+    const machine = conn.machine;
+    const machinesPk = `MACHINES#${conn.uid}`;
     try {
       await this.ddb.send(
         new UpdateCommand({
           TableName: this.table,
-          Key: { pk: "MACHINES", sk: `${machine}#META` },
+          Key: { pk: machinesPk, sk: `${machine}#META` },
           UpdateExpression: "REMOVE connectionId",
           ConditionExpression: "connectionId = :c",
           ExpressionAttributeValues: { ":c": connectionId },
@@ -271,7 +296,7 @@ export class Store {
       await this.ddb.send(
         new UpdateCommand({
           TableName: this.table,
-          Key: { pk: "MACHINES", sk: `${machine}#META` },
+          Key: { pk: this.machinesPk, sk: `${machine}#META` },
           UpdateExpression: "SET lastSeenAt = :n, serverStatus = :s",
           ConditionExpression: "connectionId = :c",
           ExpressionAttributeValues: { ":n": this.now(), ":s": serverStatus ?? {}, ":c": connectionId },
@@ -289,32 +314,48 @@ export class Store {
       new QueryCommand({
         TableName: this.table,
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :p)",
-        ExpressionAttributeValues: { ":pk": "MACHINES", ":p": `${machine}#SERVER#` },
+        ExpressionAttributeValues: { ":pk": this.machinesPk, ":p": `${machine}#SERVER#` },
         ProjectionExpression: "sk",
       })
     );
     const keep = new Set(servers.map((s) => `${machine}#SERVER#${s.name}`));
     for (const item of existing.Items ?? []) {
       if (!keep.has(item.sk as string)) {
-        await this.ddb.send(new DeleteCommand({ TableName: this.table, Key: { pk: "MACHINES", sk: item.sk } }));
+        await this.ddb.send(new DeleteCommand({ TableName: this.table, Key: { pk: this.machinesPk, sk: item.sk } }));
       }
     }
     for (const s of servers) {
       const server: MachineServer = { machine, name: s.name, title: s.title, status: s.status, error: s.error, tools: s.tools, updatedAt: now };
       await this.ddb.send(
-        new PutCommand({ TableName: this.table, Item: { pk: "MACHINES", sk: `${machine}#SERVER#${s.name}`, server } })
+        new PutCommand({ TableName: this.table, Item: { pk: this.machinesPk, sk: `${machine}#SERVER#${s.name}`, server } })
       );
     }
     const serverStatus = Object.fromEntries(servers.map((s) => [s.name, { status: s.status, ...(s.error ? { error: s.error } : {}) }]));
     await this.ddb.send(
       new UpdateCommand({
         TableName: this.table,
-        Key: { pk: "MACHINES", sk: `${machine}#META` },
+        Key: { pk: this.machinesPk, sk: `${machine}#META` },
         UpdateExpression: "SET lastSeenAt = :n, agentVersion = :v, serverStatus = :s, connectionId = :c",
         ConditionExpression: "attribute_exists(meta)",
         ExpressionAttributeValues: { ":n": now, ":v": agentVersion, ":s": serverStatus, ":c": connectionId },
       })
     );
+  }
+
+  /** Removes a machine and its catalog from the account. */
+  async deleteMachine(id: string): Promise<boolean> {
+    const res = await this.ddb.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :p)",
+        ExpressionAttributeValues: { ":pk": this.machinesPk, ":p": `${id}#` },
+        ProjectionExpression: "sk",
+      })
+    );
+    for (const item of res.Items ?? []) {
+      await this.ddb.send(new DeleteCommand({ TableName: this.table, Key: { pk: this.machinesPk, sk: item.sk } }));
+    }
+    return (res.Items ?? []).length > 0;
   }
 
   /** True if this jti has not been seen before. */
@@ -374,7 +415,7 @@ export class Store {
   // ---- calls --------------------------------------------------------------
 
   async createCall(callId: string, machine: string, agent: string): Promise<void> {
-    const meta: CallMeta = { callId, machine, agent, status: "pending", createdAt: this.now() };
+    const meta = { callId, uid: this.requireTenant(), machine, agent, status: "pending" as CallStatus, createdAt: this.now() };
     await this.ddb.send(
       new PutCommand({ TableName: this.table, Item: { pk: `CALL#${callId}`, sk: "META", ...meta, ttl: this.ttl(SHORT_TTL_SECONDS) } })
     );
@@ -398,7 +439,7 @@ export class Store {
     }
     // Refuse to store anything for a call that is not waiting on this machine.
     const call = await this.getCall(callId);
-    if (!call || call.machine !== machine || (call.status !== "pending" && call.status !== "acked")) return false;
+    if (!call || call.uid !== this.requireTenant() || call.machine !== machine || (call.status !== "pending" && call.status !== "acked")) return false;
     const bytes = Buffer.from(outcome.resultJson, "utf8");
     const chunks = Math.max(1, Math.ceil(bytes.length / RES_SLICE_BYTES));
     for (let i = 0; i < chunks; i++) {
@@ -437,9 +478,11 @@ export class Store {
           TableName: this.table,
           Key: { pk: `CALL#${callId}`, sk: "META" },
           UpdateExpression: update,
-          ConditionExpression: `machine = :m AND #s IN (${fromKeys.join(", ")})`,
+          // The call must belong to this account's machine: a result from a
+          // machine of the same name in another account does not match.
+          ConditionExpression: `uid = :u AND machine = :m AND #s IN (${fromKeys.join(", ")})`,
           ExpressionAttributeNames: { "#s": "status", ...names },
-          ExpressionAttributeValues: { ...values, ":m": machine, ...Object.fromEntries(from.map((f, i) => [`:f${i}`, f])) },
+          ExpressionAttributeValues: { ...values, ":u": this.requireTenant(), ":m": machine, ...Object.fromEntries(from.map((f, i) => [`:f${i}`, f])) },
         })
       );
       return true;
@@ -483,7 +526,7 @@ export class Store {
       await this.ddb.send(
         new UpdateCommand({
           TableName: this.table,
-          Key: { pk: `RATE#${agent}`, sk: window },
+          Key: { pk: `RATE#${this.requireTenant()}#${agent}`, sk: window },
           UpdateExpression: "ADD n :one SET #t = :ttl",
           ConditionExpression: "attribute_not_exists(n) OR n < :limit",
           ExpressionAttributeNames: { "#t": "ttl" },
@@ -500,7 +543,8 @@ export class Store {
   // ---- audit --------------------------------------------------------------
 
   async putAudit(row: AuditRow): Promise<void> {
-    await this.ddb.send(new PutCommand({ TableName: this.table, Item: row }));
+    const day = new Date(row.ts).toISOString().slice(0, 10);
+    await this.ddb.send(new PutCommand({ TableName: this.table, Item: { ...row, pk: `AUDIT#${this.requireTenant()}#${day}` } }));
   }
 
   async readAudit(day: string, limit: number): Promise<AuditRow[]> {
@@ -508,7 +552,7 @@ export class Store {
       new QueryCommand({
         TableName: this.table,
         KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": `AUDIT#${day}` },
+        ExpressionAttributeValues: { ":pk": `AUDIT#${this.requireTenant()}#${day}` },
         ScanIndexForward: false,
         Limit: limit,
       })

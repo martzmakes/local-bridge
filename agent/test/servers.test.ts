@@ -175,11 +175,38 @@ describe("errors", () => {
   });
 });
 
+describe("title and enabled", () => {
+  it("announces a title when the config sets one, and none otherwise", async () => {
+    const m = await start({ notes: fixtureServer({ title: "Apple Notes" }), plain: fixtureServer() });
+    const byName = Object.fromEntries(m.list().map((s) => [s.name, s]));
+    expect(byName.notes).toMatchObject({ name: "notes", title: "Apple Notes", status: "up" });
+    expect(ServerInfoSchema.parse(byName.notes).title).toBe("Apple Notes");
+    expect(byName.plain).not.toHaveProperty("title");
+  });
+
+  it("neither starts nor lists a disabled server, and refuses calls to it as not_exposed", async () => {
+    const m = await start({
+      on: fixtureServer(),
+      // A command that cannot run: starting it would leave a "down" entry behind.
+      off: fixtureServer({ enabled: false, command: "/nonexistent/binary" }),
+      alsooff: fixtureServer({ enabled: false }),
+    });
+    expect(m.list().map((s) => s.name)).toEqual(["on"]);
+    expect(m.statuses().map((s) => s.name)).toEqual(["on"]);
+    expect(m.report().map((s) => s.name)).toEqual(["on"]);
+    for (const server of ["off", "alsooff"]) {
+      const res = await m.callTool(server, "echo", { text: "x" }, call());
+      expect(res).toMatchObject({ ok: false, error: { code: "not_exposed" } });
+    }
+    expect((await m.callTool("on", "echo", { text: "x" }, call())).ok).toBe(true);
+  });
+});
+
 describe("lifecycle", () => {
   it("reports a server that cannot start as down, without stopping the others", async () => {
     const m = await start({
       fix: fixtureServer(),
-      broken: { transport: "stdio", command: "/nonexistent/binary", args: [], read: ["x"], write: [], concurrency: 1 },
+      broken: { transport: "stdio", command: "/nonexistent/binary", args: [], read: ["x"], write: [], concurrency: 1, enabled: true },
     });
     const byName = Object.fromEntries(m.list().map((s) => [s.name, s]));
     expect(byName.fix).toMatchObject({ status: "up" });
@@ -210,7 +237,7 @@ describe("lifecycle", () => {
   it("scrubs Keychain values from a reported startup error", async () => {
     const secret = ["synthetic", "keychain", "redaction", "fixture"].join("-");
     const m = await start(
-      { broken: { transport: "stdio", command: `/nonexistent/${secret}/bin`, args: [], read: ["x"], write: [], concurrency: 1 } },
+      { broken: { transport: "stdio", command: `/nonexistent/${secret}/bin`, args: [], read: ["x"], write: [], concurrency: 1, enabled: true } },
       { secrets: [secret] },
     );
     const error = m.list()[0]!.error!;

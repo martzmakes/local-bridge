@@ -62,8 +62,15 @@ describe("LocalBridgeStack", () => {
     });
   });
 
+  it("exposes the account API the macOS app uses", () => {
+    template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "GET /api/me" });
+    template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "GET /api/machines" });
+    template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "PUT /api/machines/{machine}" });
+    template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "DELETE /api/machines/{machine}" });
+  });
+
   it("retains bridge Lambda logs for 30 days", () => {
-    template.resourcePropertiesCountIs("AWS::Logs::LogGroup", { RetentionInDays: 30 }, 3);
+    template.resourcePropertiesCountIs("AWS::Logs::LogGroup", { RetentionInDays: 30 }, 4);
   });
 });
 

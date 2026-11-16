@@ -12,6 +12,7 @@ export function fixtureServer(overrides: Partial<Extract<ServerConfig, { transpo
     read: ["echo", "big", "slow", "crash", "boom", "automation_denied", "automation_thrown", "disk_denied"],
     write: ["write_thing"],
     concurrency: 1,
+    enabled: true,
     ...overrides,
   };
 }

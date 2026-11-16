@@ -20,6 +20,14 @@ if (!process.env.BRIDGE_TABLE) {
 
 export const OWNER_EMAIL = process.env.ALLOWED_EMAILS.split(",")[0].trim();
 
+/** `--user <email>` from argv, else the owner. The account every admin command acts on. */
+export function userEmail(argv: string[] = process.argv): string {
+  const i = argv.indexOf("--user");
+  const email = i >= 0 ? argv[i + 1] : OWNER_EMAIL;
+  if (!email || !email.includes("@")) throw new Error("--user needs an email address");
+  return email.trim().toLowerCase();
+}
+
 export function requireTable(): string {
   const t = process.env.BRIDGE_TABLE;
   if (!t) throw new Error("BRIDGE_TABLE is not set and infra/cdk-outputs.json was not found. Deploy first, or export BRIDGE_TABLE.");

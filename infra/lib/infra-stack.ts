@@ -379,6 +379,32 @@ export class LocalBridgeStack extends cdk.Stack {
     bridgeTable.grantReadWriteData(mcpHandler);
     wsStage.grantManagementApiAccess(mcpHandler);
 
+    // Account API for the macOS app (register this Mac, list and remove
+    // Macs). The account is always the bearer token's; see account/handler.ts.
+    const accountHandler = new lambda.NodejsFunction(this, "AccountHandler", {
+      ...lambdaDefaults,
+      environment: { ...lambdaDefaults.environment, BRIDGE_TABLE: bridgeTable.tableName },
+      entry: path.join(__dirname, "lambdas", "account", "handler.ts"),
+      handler: "handler",
+      logGroup: bridgeLogGroup("AccountHandlerLogs"),
+    });
+    jwtSecretParam.grantRead(accountHandler);
+    bridgeTable.grantReadWriteData(accountHandler);
+    for (const [p, methods] of [
+      ["/api/me", [apigwv2.HttpMethod.GET]],
+      ["/api/machines", [apigwv2.HttpMethod.GET]],
+      ["/api/machines/{machine}", [apigwv2.HttpMethod.PUT, apigwv2.HttpMethod.DELETE]],
+    ] as const) {
+      authHttpApi.addRoutes({
+        path: p,
+        methods: [...methods],
+        integration: new apigwv2Integrations.HttpLambdaIntegration(
+          `AccountIntegration_${p.replace(/[^a-zA-Z0-9]/g, "_")}`,
+          accountHandler
+        ),
+      });
+    }
+
     authHttpApi.addRoutes({
       path: "/mcp",
       methods: [
@@ -554,6 +580,7 @@ function handler(event) {
         "/auth/complete": spaBehavior,
         "/mcp": apiBehavior,
         "/mcp/*": apiBehavior,
+        "/api/*": apiBehavior,
         "/auth/*": apiBehavior,
         "/oauth/*": apiBehavior,
         "/.well-known/*": apiBehavior,

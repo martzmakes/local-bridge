@@ -17,6 +17,7 @@ import { verifyJwt } from "../auth/lib/jwt";
 import { GoneError } from "../bridge/dispatch";
 import { isValidAgentId, isValidName } from "../bridge/names";
 import { ConnectionGone, errName, getSecret, getStore, logEvent, pushToConnection } from "../bridge/runtime";
+import { uidFromEmail } from "../bridge/tenant";
 import { callTool, findServer, listTools, type BridgeDeps, type Caller, type Scope } from "./bridge";
 
 const PROJECT_SLUG = process.env.PROJECT_SLUG!;
@@ -31,8 +32,9 @@ const INSTRUCTIONS =
   "Local Bridge forwards tool calls to MCP servers running on the owner's own Macs. Tool names are <machine>__<server>__<tool>. " +
   OFFLINE_NOTE + " You only see tools this connection has been granted.";
 
-function deps(): BridgeDeps {
-  const store = getStore();
+/** Everything a request can touch, bound to the account of its verified token. */
+function deps(uid: string): BridgeDeps {
+  const store = getStore().forTenant(uid);
   return {
     getAgent: (id) => store.getAgent(id),
     listMachines: () => store.listMachines(),
@@ -168,7 +170,7 @@ export function scopeFromPath(rawPath: string): { scope?: Scope } | null {
 }
 
 /** Auth is shared: any valid bridge token works on every endpoint. What it may do there is policy. */
-export async function authenticate(authHeader: string | undefined): Promise<Caller | null> {
+export async function authenticate(authHeader: string | undefined): Promise<(Caller & { uid: string }) | null> {
   const match = /^Bearer\s+(.+)$/i.exec(authHeader ?? "");
   if (!match) return null;
   let claims;
@@ -179,7 +181,7 @@ export async function authenticate(authHeader: string | undefined): Promise<Call
   }
   // The web sign-in session JWT has no agent and is not a bridge credential.
   if (!claims.agent || !claims.kind || !isValidAgentId(claims.agent)) return null;
-  return { agent: claims.agent, tokenKind: claims.kind, tv: claims.tv };
+  return { agent: claims.agent, tokenKind: claims.kind, tv: claims.tv, uid: uidFromEmail(claims.email) };
 }
 
 function unauthorized(scope?: Scope) {
@@ -226,7 +228,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   const sessionHeader = { "mcp-session-id": isInitialize ? randomUUID() : incomingSession || randomUUID() };
   const accepted = { statusCode: 202, headers: { ...corsHeaders(), ...sessionHeader }, body: "" };
 
-  const d = deps();
+  const d = deps(caller.uid);
   if (Array.isArray(parsed)) {
     // Batches run in order, not in parallel, so one request cannot fan out
     // past the machine's concurrency.

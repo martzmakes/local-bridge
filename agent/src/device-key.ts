@@ -52,10 +52,14 @@ async function newKey(): Promise<PrivateDeviceJwk> {
 
 export interface DeviceKeyOptions {
   now?: () => number;
+  /** The account id; sent as the assertion's `uid` claim, which the cloud requires. */
+  account?: string;
 }
 
 export class DeviceKey {
   private readonly now: () => number;
+
+  private readonly account: string | undefined;
 
   constructor(
     private readonly keychain: Keychain,
@@ -63,6 +67,7 @@ export class DeviceKey {
     opts: DeviceKeyOptions = {},
   ) {
     this.now = opts.now ?? Date.now;
+    this.account = opts.account;
   }
 
   private async load(service: string): Promise<PrivateDeviceJwk | null> {
@@ -135,7 +140,7 @@ export class DeviceKey {
     if (!jwk) throw new Error("no device key in the Keychain; run `local-bridge-agent init`");
     const key = await importJWK(jwk, "EdDSA");
     const iat = Math.floor(this.now() / 1000);
-    return new SignJWT({})
+    return new SignJWT(this.account ? { uid: this.account } : {})
       .setProtectedHeader({ alg: "EdDSA", kid: kidFor(jwk.x), typ: "JWT" })
       .setIssuer(this.machine)
       .setSubject(this.machine)

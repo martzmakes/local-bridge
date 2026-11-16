@@ -1,6 +1,6 @@
 // Admin CLI for Local Bridge: agents, allowlist rules, machines, audit.
 //   AWS_PROFILE=your-profile npx ts-node --prefer-ts-exts scripts/admin.ts <command>
-import { requireTable } from "./env";
+import { requireTable, userEmail } from "./env";
 import { readFileSync } from "fs";
 import { createHash } from "crypto";
 import { OFFLINE_AFTER_MS } from "../lib/shared/protocol";
@@ -8,8 +8,11 @@ import { isValidAgentId, isValidName, parseCanonical } from "../lib/lambdas/brid
 import { RuleSchema, type Rule } from "../lib/lambdas/bridge/policy";
 import { getStore } from "../lib/lambdas/bridge/runtime";
 import { AGENT_DEFAULTS, type AgentMeta, type DeviceKey } from "../lib/lambdas/bridge/store";
+import { uidFromEmail } from "../lib/lambdas/bridge/tenant";
 
 const HELP = `Local Bridge admin
+
+Every command acts on one account: --user <email>, default the first allowed email.
 
 Agents
   agent list
@@ -27,7 +30,8 @@ Rules (default deny; a write tool needs --write and an exact tool name)
 
 Machines
   device list
-  device register <machine> '<public jwk json>'    replaces all keys for the machine
+  device register <machine> '<public jwk json>'    replaces all keys (normally the app does this at sign-in)
+  device remove <machine>
   device enable <machine> | device disable <machine>
 
 Audit
@@ -77,7 +81,9 @@ async function main() {
     return;
   }
   requireTable();
-  const store = getStore();
+  const email = userEmail();
+  const store = getStore().forTenant(uidFromEmail(email));
+  process.stderr.write(`account: ${email}\n`);
 
   if (group === "agent") {
     const [cmd, idArg] = args;
@@ -160,6 +166,11 @@ async function main() {
       return;
     }
     if (!existing) throw new Error(`machine "${id}" is not registered`);
+    if (cmd === "remove") {
+      await store.deleteMachine(id);
+      console.log(`removed ${id}`);
+      return;
+    }
     if (cmd === "enable" || cmd === "disable") {
       await store.putMachineRegistration(id, cmd === "enable", existing.keys);
       console.log(`${id} ${cmd}d${cmd === "disable" ? " (it can no longer connect; an open connection stops receiving calls)" : ""}`);

@@ -12,7 +12,7 @@ interface WsEvent {
   requestContext: {
     routeKey: string;
     connectionId: string;
-    authorizer?: { machine?: string; kid?: string };
+    authorizer?: { uid?: string; machine?: string; kid?: string };
   };
   body?: string | null;
   isBase64Encoded?: boolean;
@@ -28,31 +28,36 @@ const OK = { statusCode: 200, body: "" };
 
 export async function handleEvent(event: WsEvent, deps: WsDeps) {
   const { routeKey, connectionId } = event.requestContext;
-  const { store } = deps;
+  const root = deps.store;
 
   if (routeKey === "$connect") {
+    const uid = event.requestContext.authorizer?.uid;
     const machine = event.requestContext.authorizer?.machine;
     const kid = event.requestContext.authorizer?.kid;
-    if (!machine || !kid) return { statusCode: 401, body: "" };
+    if (!uid || !machine || !kid) return { statusCode: 401, body: "" };
+    const store = root.forTenant(uid);
     await store.bindConnection(machine, connectionId, kid);
     // A connect with the new key completes a rotation: drop the outgoing key.
     const meta = await store.getMachine(machine);
     const pruned = meta ? pruneKeysAfterAuth(meta.keys, kid) : null;
     if (meta && pruned) await store.putMachineRegistration(machine, meta.enabled, pruned);
-    logEvent("machine_connected", { machine, connectionId });
+    logEvent("machine_connected", { uid, machine, connectionId });
     return OK;
   }
 
   if (routeKey === "$disconnect") {
-    await store.unbindConnection(connectionId);
+    await root.unbindConnection(connectionId);
     logEvent("machine_disconnected", { connectionId });
     return OK;
   }
 
   // $default
-  const conn = await store.connection(connectionId);
+  // The connection row, written at $connect from the verified assertion, is
+  // the only source of which account and machine a message belongs to.
+  const conn = await root.connection(connectionId);
   if (!conn) return { statusCode: 403, body: "" };
   const machine = conn.machine;
+  const store = root.forTenant(conn.uid);
 
   let message: MachineMessage;
   try {

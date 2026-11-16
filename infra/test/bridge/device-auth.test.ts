@@ -3,6 +3,8 @@ import { keysAfterRotate, pruneKeysAfterAuth, verifyDeviceAssertion } from "../.
 import type { DeviceKey, MachineMeta } from "../../lib/lambdas/bridge/store";
 
 const NOW = Date.UTC(2026, 10, 15, 12, 0, 0);
+const UID = "a".repeat(20);
+const OTHER_UID = "b".repeat(20);
 
 async function makeKey(kid: string) {
   const { publicKey, privateKey } = await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true });
@@ -13,9 +15,9 @@ async function makeKey(kid: string) {
 
 type PrivateKey = Awaited<ReturnType<typeof generateKeyPair>>["privateKey"];
 
-async function assertion(privateKey: PrivateKey, o: { kid?: string; iss?: string; aud?: string; iat?: number; exp?: number; jti?: string } = {}) {
+async function assertion(privateKey: PrivateKey, o: { kid?: string; iss?: string; aud?: string; iat?: number; exp?: number; jti?: string; uid?: string | null } = {}) {
   const iat = o.iat ?? Math.floor(NOW / 1000);
-  return new SignJWT({})
+  return new SignJWT(o.uid === null ? {} : { uid: o.uid ?? UID })
     .setProtectedHeader({ alg: "EdDSA", kid: o.kid ?? "k1" })
     .setIssuer(o.iss ?? "mini")
     .setSubject(o.iss ?? "mini")
@@ -26,10 +28,11 @@ async function assertion(privateKey: PrivateKey, o: { kid?: string; iss?: string
     .sign(privateKey);
 }
 
+/** `machine` is registered in account UID only. */
 function deps(machine: MachineMeta | null) {
   const seen = new Set<string>();
   return {
-    getMachine: async (id: string) => (machine && machine.id === id ? machine : null),
+    getMachine: async (uid: string, id: string) => (machine && uid === UID && machine.id === id ? machine : null),
     claimJti: async (jti: string) => (seen.has(jti) ? false : (seen.add(jti), true)),
     now: () => NOW,
   };
@@ -39,7 +42,20 @@ describe("device assertion", () => {
   it("accepts an assertion signed by the registered key", async () => {
     const { key, privateKey } = await makeKey("k1");
     const d = deps({ id: "mini", enabled: true, keys: [key] });
-    expect(await verifyDeviceAssertion(await assertion(privateKey), d)).toEqual({ ok: true, machine: "mini", kid: "k1" });
+    expect(await verifyDeviceAssertion(await assertion(privateKey), d)).toEqual({ ok: true, uid: UID, machine: "mini", kid: "k1" });
+  });
+
+  it("does not accept a machine's key under another account, even with the same machine name", async () => {
+    const { key, privateKey } = await makeKey("k1");
+    const d = deps({ id: "mini", enabled: true, keys: [key] });
+    expect(await verifyDeviceAssertion(await assertion(privateKey, { uid: OTHER_UID }), d)).toEqual({ ok: false, reason: "unknown_machine" });
+  });
+
+  it("refuses an assertion that names no account", async () => {
+    const { key, privateKey } = await makeKey("k1");
+    const d = deps({ id: "mini", enabled: true, keys: [key] });
+    expect(await verifyDeviceAssertion(await assertion(privateKey, { uid: null }), d)).toEqual({ ok: false, reason: "no_account" });
+    expect(await verifyDeviceAssertion(await assertion(privateKey, { uid: "../etc" }), d)).toEqual({ ok: false, reason: "no_account" });
   });
 
   it("rejects a replayed assertion", async () => {

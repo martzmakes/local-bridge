@@ -14,6 +14,7 @@ import {
   HEARTBEAT_INTERVAL_MS,
   PROTOCOL_VERSION,
   encodeFrames,
+  type CallErrorCode,
   type CallMessage,
   type MachineMessage,
   type ResultMessage,
@@ -33,6 +34,12 @@ export interface SocketLike {
   on(event: "message", listener: (data: unknown) => void): unknown;
   on(event: "close", listener: (code: number) => void): unknown;
   on(event: "error", listener: (err: Error) => void): unknown;
+  /**
+   * `ws` emits this when the server answers the upgrade with a plain HTTP response
+   * (401/403 from the authorizer). With a listener attached `ws` no longer aborts
+   * the handshake itself, so the listener must close the socket.
+   */
+  on(event: "unexpected-response", listener: (request: unknown, response: { statusCode?: number }) => void): unknown;
 }
 export type SocketFactory = (url: string, options: { headers: Record<string, string> }) => SocketLike;
 
@@ -71,6 +78,29 @@ export const DEFAULT_TIMING: ConnectionTiming = {
   handshakeTimeoutMs: 15_000,
 };
 
+/** What the status file reports about the socket. */
+export interface ConnectionStatus {
+  /** `offline` covers the whole time between a failure and the next successful open, retries included. */
+  state: "connecting" | "connected" | "offline";
+  /** Epoch milliseconds of the last change of `state`. */
+  since: number;
+  /**
+   * Why the last attempt or connection ended: `auth_refused` (upgrade answered 401/403),
+   * `http_<status>`, `close_<code>`, an error class such as `Error ECONNREFUSED`, or
+   * `no_account` (written by `run` itself when the config names no account).
+   * Never message text. Null once connected.
+   */
+  lastError: string | null;
+}
+
+/** One finished call, by name and outcome only. */
+export interface CallFinished {
+  server: string;
+  tool: string;
+  outcome: "ok" | CallErrorCode;
+  at: number;
+}
+
 export interface ConnectionOptions {
   machine: string;
   endpoint: string;
@@ -81,6 +111,10 @@ export interface ConnectionOptions {
   pendingRotation?: () => Promise<PublicDeviceJwk | null>;
   /** The cloud accepted the rotation key `kid`. Resolve true once it is the current key. */
   onRotated?: (kid: string) => Promise<boolean>;
+  /** Called on every change of the connection status. */
+  onStatus?: (status: ConnectionStatus) => void;
+  /** Called when a call has been answered or refused. */
+  onCallFinished?: (call: CallFinished) => void;
   log?: Logger;
   now?: () => number;
   random?: () => number;
@@ -131,6 +165,10 @@ export class Connection {
   private helloTimer: TimerHandle;
   private unsubscribe: (() => void) | undefined;
 
+  private state: ConnectionStatus;
+  /** Why the socket being opened or held is failing, noted before its close event arrives. */
+  private pendingError: string | undefined;
+
   /** Calls running for the current socket. */
   private readonly inFlight = new Map<string, AbortController>();
   private drainWaiters: Array<() => void> = [];
@@ -141,6 +179,7 @@ export class Connection {
     this.random = opts.random ?? Math.random;
     this.timers = opts.timers ?? realTimers;
     this.timing = { ...DEFAULT_TIMING, ...opts.timing };
+    this.state = { state: "offline", since: this.now(), lastError: null };
     this.createSocket =
       opts.createSocket ??
       ((url, o) =>
@@ -155,12 +194,40 @@ export class Connection {
     return this.open;
   }
 
+  get status(): ConnectionStatus {
+    return { ...this.state };
+  }
+
+  private setState(state: ConnectionStatus["state"], lastError?: string | null): void {
+    const next: ConnectionStatus = {
+      state,
+      since: state === this.state.state ? this.state.since : this.now(),
+      lastError: lastError === undefined ? this.state.lastError : lastError,
+    };
+    if (next.state === this.state.state && next.lastError === this.state.lastError) return;
+    this.state = next;
+    try {
+      this.opts.onStatus?.({ ...next });
+    } catch {
+      // a status listener must not affect the connection
+    }
+  }
+
+  private callFinished(call: CallMessage, outcome: CallFinished["outcome"]): void {
+    try {
+      this.opts.onCallFinished?.({ server: call.server, tool: call.tool, outcome, at: this.now() });
+    } catch {
+      // as above
+    }
+  }
+
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
     this.lastTick = this.now();
     this.wakeTimer = this.timers.setInterval(() => this.wakeCheck(), this.timing.wakeCheckMs);
     this.unsubscribe = this.opts.servers.onChange(() => this.scheduleHello());
+    this.setState("connecting");
     void this.connect();
   }
 
@@ -174,6 +241,7 @@ export class Connection {
     this.draining = true;
     await this.drain(drainMs);
     this.dropSocket(1000);
+    this.setState("offline");
   }
 
   /** Re-checks for a pending rotation key (the CLI's `rotate-key` asks for this with SIGHUP). */
@@ -197,12 +265,16 @@ export class Connection {
     if (this.stopped) return;
     const epoch = ++this.epoch;
     this.draining = false;
+    this.pendingError = undefined;
     let assertion: string;
     try {
       assertion = await this.opts.signAssertion();
     } catch (err) {
       this.log.error("assertion_failed", { errorClass: errorClass(err) });
-      if (epoch === this.epoch) this.scheduleRetry();
+      if (epoch === this.epoch) {
+        this.setState("offline", errorClass(err));
+        this.scheduleRetry();
+      }
       return;
     }
     if (this.stopped || epoch !== this.epoch) return;
@@ -212,6 +284,7 @@ export class Connection {
       socket = this.createSocket(this.opts.endpoint, { headers: { Authorization: `Bearer ${assertion}` } });
     } catch (err) {
       this.log.error("socket_create_failed", { errorClass: errorClass(err) });
+      this.setState("offline", errorClass(err));
       this.scheduleRetry();
       return;
     }
@@ -222,9 +295,26 @@ export class Connection {
     socket.on("message", (data) => {
       if (epoch === this.epoch) this.onMessage(rawToString(data), epoch);
     });
+    socket.on("unexpected-response", (_request, response) => {
+      // The upgrade was answered with plain HTTP. 401/403 is the authorizer saying
+      // this device key is not registered (or the assertion is bad).
+      if (epoch === this.epoch) {
+        const status = typeof response?.statusCode === "number" ? response.statusCode : 0;
+        this.pendingError = status === 401 || status === 403 ? "auth_refused" : `http_${status}`;
+        this.log.warn("upgrade_refused", { status });
+      }
+      // Having listened, we own the abort: `ws` then emits error and close as usual.
+      try {
+        if (socket.terminate) socket.terminate();
+        else socket.close();
+      } catch {
+        // already gone
+      }
+    });
     socket.on("error", (err) => {
-      // `ws` reports a refused upgrade (401/403 from the authorizer) here, then closes.
-      if (epoch === this.epoch) this.log.warn("socket_error", { errorClass: errorClass(err) });
+      if (epoch !== this.epoch) return;
+      this.pendingError ??= errorClass(err);
+      this.log.warn("socket_error", { errorClass: errorClass(err) });
     });
     socket.on("close", (code) => {
       if (epoch === this.epoch) this.onClose(code);
@@ -234,6 +324,8 @@ export class Connection {
   private onOpen(): void {
     this.open = true;
     this.attempt = 0;
+    this.pendingError = undefined;
+    this.setState("connected", null);
     this.log.info("connected", { endpoint: this.opts.endpoint });
     this.sendHello();
     this.heartbeatTimer = this.timers.setInterval(() => {
@@ -246,8 +338,11 @@ export class Connection {
   /** The socket closed without us asking for it. */
   private onClose(code: number): void {
     const wasOpen = this.open;
+    const reason = this.pendingError ?? `close_${code}`;
+    this.pendingError = undefined;
     this.teardown();
     this.log.warn("disconnected", { code, wasOpen });
+    this.setState("offline", reason);
     this.scheduleRetry();
   }
 
@@ -297,6 +392,7 @@ export class Connection {
     this.timers.clearTimeout(this.retryTimer);
     this.dropSocket(reason === "wake" ? undefined : 1000);
     this.attempt = 0;
+    this.setState("connecting");
     void this.connect();
   }
 
@@ -469,6 +565,7 @@ export class Connection {
 
     const refuse = (code: "expired" | "busy", message: string) => {
       this.log.info("call_refused", { callId, server: call.server, tool: call.tool, code });
+      this.callFinished(call, code);
       this.sendResult({ type: "result", callId, ok: false, error: { code, message } }, socket);
     };
     const now = this.now();
@@ -498,6 +595,7 @@ export class Connection {
         error: { code: "tool_error", message: `the agent failed to run the call (${errorClass(err)})` },
       };
     }
+    this.callFinished(call, result.ok ? "ok" : result.error.code);
     if (this.inFlight.get(callId) === controller) {
       this.inFlight.delete(callId);
       this.sendResult(result, socket);
