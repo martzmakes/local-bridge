@@ -39,6 +39,7 @@ public struct BridgePaths: Sendable, Equatable {
 
     public var statusURL: URL { stateDirectory.appendingPathComponent("status.json") }
     public var inspectCacheURL: URL { stateDirectory.appendingPathComponent("app-inspect-cache.json") }
+    public var activityURL: URL { stateDirectory.appendingPathComponent("activity.jsonl") }
     public var cliURL: URL? { agentDirectory?.appendingPathComponent("cli.mjs") }
 }
 

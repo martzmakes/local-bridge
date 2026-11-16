@@ -43,9 +43,23 @@ enum SampleData {
         BridgeConfig(machine: "mini", publicBase: "https://bridge.martzmakes.com", account: uid)
     }
 
+    static let searchNotesSchema = try! JSONValue.parse("""
+    {"type":"object","required":["query"],"properties":{
+      "query":{"type":"string","description":"Text to search for in titles and bodies"},
+      "folder":{"type":"string","description":"Only search this folder"},
+      "limit":{"type":"integer","default":10,"description":"Most notes to return"}}}
+    """)
+
+    static let searchNotesResult = ToolCallResult(content: [.text("""
+    [{"id":"x-coredata://7C2E/ICNote/p412","title":"Ski trip packing","folder":"Travel","modified":"2026-11-12T19:04:00Z","snippet":"Helmets, goggles, hand warmers, spare mittens"},{"id":"x-coredata://7C2E/ICNote/p377","title":"Packing list template","folder":"Notes","modified":"2026-09-30T08:15:00Z","snippet":"Chargers, passports, snacks for the car"}]
+    """)], isError: false, milliseconds: 1240)
+
     private static func tools(_ items: [(String, String, ToolAccess)]) -> InspectCache.Entry {
         InspectCache.Entry(
-            tools: items.map { InspectedTool(name: $0.0, description: $0.1, suggestedAccess: $0.2) },
+            tools: items.map {
+                InspectedTool(name: $0.0, description: $0.1, suggestedAccess: $0.2,
+                              inputSchema: $0.0 == "search_notes" ? searchNotesSchema : .object(["type": .string("object"), "properties": .object([:])]))
+            },
             inspectedAt: Date().addingTimeInterval(-5 * 60))
     }
 
@@ -142,6 +156,26 @@ enum SampleData {
           "servers":[{"name":"notes","title":"Apple Notes","status":"up","tools":4},{"name":"messages","title":"Messages","status":"up","tools":6},{"name":"reminders","title":"Reminders","status":"up","tools":4},{"name":"ha","title":"Home Assistant","status":"down","tools":0}]}]
         """
         return try! JSONDecoder().decode([AccountMachine].self, from: Data(json.utf8))
+    }
+
+    /// What a first look at this Mac's other apps turns up.
+    static var discovery: DiscoveryResult {
+        func found(_ key: String, _ title: String, _ name: String, _ project: String, _ sources: [DiscoverySource] = [.claudeCode]) -> DiscoveredServer {
+            var config = node(project)
+            config.title = title
+            return DiscoveredServer(key: key, sources: sources, proposedTitle: title, proposedName: name,
+                                    config: config, summary: ServerDiscovery.summary(of: config))
+        }
+        var result = DiscoveryResult()
+        result.servers = [
+            found("apple-notes", "Apple Notes", "notes", "apple-notes-mcp", [.claudeCode, .claudeDesktop]),
+            found("imessage", "Messages", "messages", "imessage-mcp"),
+            found("apple-reminders", "Reminders", "reminders", "apple-reminders-mcp"),
+            found("apple-calendar", "Calendar", "calendar", "apple-calendar-mcp"),
+            found("apple-mail", "Mail", "mail", "apple-mail-mcp"),
+        ]
+        result.alreadyRemote = [RemoteServerNote(title: "Linear", host: "mcp.linear.app", sources: [.claudeCode])]
+        return result
     }
 
     /// Signed in, connected, everything populated.

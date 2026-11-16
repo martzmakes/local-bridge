@@ -39,15 +39,30 @@ enum ServerRunState: Equatable {
     case unknown
 }
 
-struct ToolRow: Identifiable, Equatable {
-    var name: String
-    var description: String
-    var isOn: Bool
-    var changesThings: Bool
-    /// The last inspection did not list this tool, but the config exposes it.
-    var notReported: Bool
+struct PendingBulkWrite: Identifiable, Equatable {
+    var server: String
+    var tools: [String]
+    var id: String { server }
+}
 
-    var id: String { name }
+struct TryTarget: Identifiable, Equatable {
+    var server: String
+    var tool: ToolEntry
+    var id: String { "\(server).\(tool.name)" }
+}
+
+enum ConnectorApp {
+    case claude
+    case chatGPT
+
+    var settingsURL: URL {
+        switch self {
+        case .claude: return URL(string: "https://claude.ai/settings/connectors")!
+        case .chatGPT: return URL(string: "https://chatgpt.com/#settings/Connectors")!
+        }
+    }
+
+    var name: String { self == .claude ? "Claude" : "ChatGPT" }
 }
 
 struct PendingWriteTool: Identifiable, Equatable {
@@ -79,6 +94,10 @@ final class AppModel {
     var selection: SidebarItem?
     var settingsTab: SettingsTab = .general
     var showingAddServer = false
+    /// The add sheet opens on what was found on this Mac unless this is set.
+    var addServerStartsManual = false
+    var confirmingSave = false
+    var tryingTool: TryTarget?
 
     // Daemon
     private(set) var status: StatusSnapshot = .notRunning(lastKnown: nil)
@@ -96,6 +115,10 @@ final class AppModel {
     private(set) var inspecting: Set<String> = []
     private(set) var inspectErrors: [String: String] = [:]
     var pendingWriteTool: PendingWriteTool?
+    var pendingBulkWrite: PendingBulkWrite?
+    /// What other apps on this Mac already have configured. nil until looked up.
+    private(set) var discovery: DiscoveryResult?
+    private(set) var isDiscovering = false
     private var confirmedWriteTools: Set<String> = []
 
     // Account
@@ -114,6 +137,7 @@ final class AppModel {
     private(set) var launchAtLoginError: String?
 
     @ObservationIgnored private let store: ConfigStore
+    @ObservationIgnored private let activityStore: ActivityStore
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored private var supervisor: DaemonSupervisor?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
@@ -129,6 +153,8 @@ final class AppModel {
         runsWithoutAccount = environment["LOCAL_BRIDGE_NO_ACCOUNT"] == "1"
         isPreview = false
         store = ConfigStore(url: paths.configURL)
+        activityStore = ActivityStore(url: paths.activityURL)
+        activity = ActivityBuffer(capacity: ActivityStore.maxLines)
         paused = defaults.bool(forKey: "paused")
         nodeOverride = defaults.string(forKey: "nodePath") ?? ""
     }
@@ -144,6 +170,7 @@ final class AppModel {
         runsWithoutAccount = false
         isPreview = true
         store = ConfigStore(url: paths.configURL)
+        activityStore = ActivityStore(url: paths.activityURL)
         paused = state.paused
         nodeOverride = state.nodeOverride
         saved = state.saved
@@ -164,6 +191,7 @@ final class AppModel {
         machinesLoaded = true
         proposedMachineName = state.proposedMachineName
         launchAtLogin = state.launchAtLogin
+        discovery = state.discovery
         bootstrapped = true
     }
 
@@ -174,6 +202,15 @@ final class AppModel {
         bootstrapped = true
         reloadConfig()
         inspections = InspectCache.load(from: paths.inspectCacheURL)
+        let storedActivity = activityStore
+        Task {
+            let lines = await Task.detached { storedActivity.load() }.value
+            var restored = ActivityBuffer(capacity: ActivityStore.maxLines)
+            lines.forEach { restored.ingest(line: $0) }
+            // Calls that arrived while the file was being read come after the stored ones.
+            let fresh = self.activity.entries.count
+            if fresh == 0 { self.activity = restored }
+        }
         refreshLaunchAtLogin()
 
         if runsWithoutAccount {
@@ -263,6 +300,23 @@ final class AppModel {
         }
     }
 
+    /// How long ago an agent last used the bridge, when that was recent enough that a call may still be running.
+    var secondsSinceLastCall: Int? {
+        guard status.isRunning, let lastAt = status.status?.calls?.lastAt else { return nil }
+        let seconds = Int(Date().timeIntervalSince1970 - lastAt / 1000)
+        return (0..<60).contains(seconds) ? seconds : nil
+    }
+
+    /// Save, asking first when the restart could cut off a call that is still running.
+    func requestSave() {
+        guard !isReadOnly, isDirty else { return }
+        if secondsSinceLastCall != nil {
+            confirmingSave = true
+        } else {
+            save()
+        }
+    }
+
     /// Validate, write, restart the daemon.
     func save() {
         guard !isPreview else { return }
@@ -321,6 +375,55 @@ final class AppModel {
         refreshTools(for: name)
     }
 
+    // MARK: - Servers other apps already have
+
+    func loadDiscovery() {
+        guard !isPreview, !isDiscovering else { return }
+        isDiscovering = true
+        let existing = draft
+        Task {
+            let result = await Task.detached { ServerDiscovery().discover(existing: existing) }.value
+            self.discovery = result
+            self.isDiscovering = false
+        }
+    }
+
+    /// Adds the chosen servers as they are configured elsewhere, then asks each for its tools.
+    func importServers(_ servers: [DiscoveredServer]) {
+        guard !isReadOnly else { return }
+        var added: [String] = []
+        for server in servers where draft.servers.count < BridgeConfig.maxServers {
+            var name = server.proposedName
+            if draft.servers[name] != nil { name = ServerDiscovery.uniqueName(name, taken: Set(draft.servers.keys)) }
+            draft.servers[name] = server.config.normalized()
+            added.append(name)
+        }
+        if let first = added.first { selection = .server(first) }
+        added.forEach { refreshTools(for: $0) }
+        discovery = nil
+    }
+
+    // MARK: - Connecting and trying
+
+    /// Copies the connector URL and opens that product's connector settings.
+    func openConnector(_ app: ConnectorApp, server name: String) {
+        guard !isPreview else { return }
+        copyToPasteboard(endpointURL(for: name))
+        NSWorkspace.shared.open(app.settingsURL)
+    }
+
+    /// Calls one tool on this Mac, outside the bridge. The result goes to the caller only.
+    func runTool(server name: String, tool: String, arguments: JSONValue) async -> ToolRunOutcome {
+        guard !isPreview else { return .failed("Not available in a preview.") }
+        guard let server = draft.servers[name] else { return .failed("The server is no longer there.") }
+        guard let node = resolvedNode else { return .failed("Node was not found. Set its path in Settings.") }
+        guard let cli = paths.cliURL?.path, FileManager.default.fileExists(atPath: cli) else {
+            return .failed("The bridge agent is missing from this app.")
+        }
+        return await ToolRunner(nodePath: node, cliPath: cli, environment: childEnvironment(node: node))
+            .call(server: server, tool: tool, arguments: arguments)
+    }
+
     func removeServer(_ name: String) {
         guard !isReadOnly else { return }
         draft.servers[name] = nil
@@ -350,57 +453,22 @@ final class AppModel {
         inspections.servers[name]?.inspectedAt
     }
 
-    func toolRows(for name: String) -> [ToolRow] {
-        guard let server = draft.servers[name] else { return [] }
-        let inspected = inspections.servers[name]?.tools ?? []
-        var rows = inspected.map { tool in
-            ToolRow(
-                name: tool.name,
-                description: tool.description ?? "",
-                isOn: server.access(for: tool.name) != nil,
-                changesThings: (server.access(for: tool.name) ?? tool.suggestedAccess) == .write,
-                notReported: false)
-        }
-        let known = Set(inspected.map(\.name))
-        // Tools the config names that no inspection has listed: still shown, so they can be switched off.
-        var extras: [String] = []
-        for tool in server.read + server.write + (saved?.servers[name]?.read ?? []) + (saved?.servers[name]?.write ?? [])
-        where !known.contains(tool) && !extras.contains(tool) {
-            extras.append(tool)
-        }
-        rows += extras.map { tool in
-            ToolRow(
-                name: tool, description: "",
-                isOn: server.access(for: tool) != nil,
-                changesThings: fallbackAccess(server: name, tool: tool) == .write,
-                notReported: !inspected.isEmpty)
-        }
-        return rows
+    func toolGroups(for name: String) -> ToolGroups {
+        guard let server = draft.servers[name] else { return ToolGroups(read: [], write: []) }
+        return ToolCatalog.groups(
+            server: server, saved: saved?.servers[name],
+            inspected: inspections.servers[name]?.tools,
+            overrides: inspections.servers[name]?.overrides ?? [:])
     }
 
-    private func fallbackAccess(server name: String, tool: String) -> ToolAccess {
-        draft.servers[name]?.access(for: tool)
-            ?? saved?.servers[name]?.access(for: tool)
-            ?? ToolAccess.suggested(forToolNamed: tool)
-    }
-
-    private func access(server name: String, tool: String) -> ToolAccess {
-        if let current = draft.servers[name]?.access(for: tool) { return current }
-        if let inspected = inspections.servers[name]?.tools.first(where: { $0.name == tool }) {
-            return inspected.suggestedAccess
-        }
-        return fallbackAccess(server: name, tool: tool)
-    }
-
-    /// The per-tool switch. Switching a write tool on asks once.
-    func setTool(server name: String, tool: String, on: Bool) {
+    /// The per-tool switch. Switching on a tool that can make changes asks once.
+    func setTool(server name: String, tool: ToolEntry, on: Bool) {
         guard !isReadOnly else { return }
-        let access = access(server: name, tool: tool)
-        if on, access == .write, !confirmedWriteTools.contains("\(name).\(tool)") {
-            pendingWriteTool = PendingWriteTool(server: name, tool: tool)
+        if on, tool.access == .write, !confirmedWriteTools.contains("\(name).\(tool.name)") {
+            pendingWriteTool = PendingWriteTool(server: name, tool: tool.name)
             return
         }
-        draft.servers[name]?.setTool(tool, exposed: on, access: access)
+        draft.servers[name]?.setTool(tool.name, exposed: on, access: tool.access)
     }
 
     func confirmPendingWriteTool() {
@@ -408,6 +476,38 @@ final class AppModel {
         confirmedWriteTools.insert(pending.id)
         pendingWriteTool = nil
         draft.servers[pending.server]?.setTool(pending.tool, exposed: true, access: .write)
+    }
+
+    /// The header control of a group. Turning on every tool that can make changes asks first.
+    func setAllTools(server name: String, access: ToolAccess, on: Bool) {
+        guard !isReadOnly else { return }
+        let groups = toolGroups(for: name)
+        let tools = (access == .read ? groups.read : groups.write).map(\.name)
+        if on, access == .write {
+            pendingBulkWrite = PendingBulkWrite(server: name, tools: tools)
+            return
+        }
+        draft.servers[name]?.setTools(tools, exposed: on, access: access)
+    }
+
+    func confirmPendingBulkWrite() {
+        guard let pending = pendingBulkWrite else { return }
+        pendingBulkWrite = nil
+        pending.tools.forEach { confirmedWriteTools.insert("\(pending.server).\($0)") }
+        draft.servers[pending.server]?.setTools(pending.tools, exposed: true, access: .write)
+    }
+
+    /// Moves a tool to the other group. For a tool that is on this changes the list it is saved
+    /// under; for one that is off it is remembered with the tool list.
+    func moveTool(server name: String, tool: String, to access: ToolAccess) {
+        guard !isReadOnly else { return }
+        draft.servers[name]?.reclassify(tool, as: access)
+        var entry = inspections.servers[name] ?? InspectCache.Entry(tools: [], inspectedAt: Date())
+        var overrides = entry.overrides ?? [:]
+        overrides[tool] = access
+        entry.overrides = overrides
+        if inspections.servers[name] != nil || !isPreview { inspections.servers[name] = entry }
+        if !isPreview { try? inspections.save(to: paths.inspectCacheURL) }
     }
 
     func isInspecting(_ name: String) -> Bool { inspecting.contains(name) }
@@ -434,7 +534,8 @@ final class AppModel {
             switch result {
             case .ok(let tools):
                 let first = self.inspections.servers[name] == nil
-                self.inspections.servers[name] = .init(tools: tools, inspectedAt: Date())
+                self.inspections.servers[name] = .init(
+                    tools: tools, inspectedAt: Date(), overrides: self.inspections.servers[name]?.overrides)
                 try? self.inspections.save(to: self.paths.inspectCacheURL)
                 if first, !self.isReadOnly { self.draft.servers[name]?.applyFirstInspection(tools) }
             case .failed(let message):
@@ -536,7 +637,10 @@ final class AppModel {
             supervisorState = state
             if case .blocked(.launchAgentLoaded) = state { blocker = .launchAgentLoaded }
         case .stdoutLine(let line):
-            if !activity.ingest(line: line), line.contains("\"level\":\"error\"") {
+            if activity.ingest(line: line) {
+                let store = activityStore
+                Task.detached { store.append(line) }
+            } else if line.contains("\"level\":\"error\"") {
                 // Content-free by construction: the daemon logs event names and error classes only.
                 let object = (try? JSONValue.parse(line))?.objectValue
                 let parts = [object?["event"]?.stringValue, object?["errorClass"]?.stringValue].compactMap { $0 }
@@ -867,6 +971,7 @@ struct PreviewState {
     var machines: [AccountMachine] = []
     var proposedMachineName = "mini"
     var launchAtLogin = true
+    var discovery: DiscoveryResult?
 }
 
 private struct RegistrationFailure: LocalizedError {

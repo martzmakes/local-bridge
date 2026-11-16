@@ -5,14 +5,17 @@ public struct InspectedTool: Sendable, Equatable, Codable, Identifiable {
     public var description: String?
     public var readOnlyHint: Bool?
     public var suggestedAccess: ToolAccess
+    /// The tool's JSON input schema, when the agent reports it.
+    public var inputSchema: JSONValue?
 
     public var id: String { name }
 
-    public init(name: String, description: String? = nil, readOnlyHint: Bool? = nil, suggestedAccess: ToolAccess) {
+    public init(name: String, description: String? = nil, readOnlyHint: Bool? = nil, suggestedAccess: ToolAccess, inputSchema: JSONValue? = nil) {
         self.name = name
         self.description = description
         self.readOnlyHint = readOnlyHint
         self.suggestedAccess = suggestedAccess
+        self.inputSchema = inputSchema
     }
 }
 
@@ -71,7 +74,8 @@ public struct InspectRunner: Sendable {
                 let access = t["suggestedAccess"]?.stringValue.flatMap(ToolAccess.init(rawValue:))
                     ?? ToolAccess.suggested(forToolNamed: name, readOnlyHint: hint)
                 tools.append(InspectedTool(
-                    name: name, description: t["description"]?.stringValue, readOnlyHint: hint, suggestedAccess: access))
+                    name: name, description: t["description"]?.stringValue, readOnlyHint: hint, suggestedAccess: access,
+                    inputSchema: t["inputSchema"]?.objectValue == nil ? nil : t["inputSchema"]))
             }
             return .ok(tools)
         }
@@ -85,10 +89,13 @@ public struct InspectCache: Sendable, Equatable, Codable {
     public struct Entry: Sendable, Equatable, Codable {
         public var tools: [InspectedTool]
         public var inspectedAt: Date
+        /// Tools the user moved to the other group. Kept across inspections.
+        public var overrides: [String: ToolAccess]?
 
-        public init(tools: [InspectedTool], inspectedAt: Date) {
+        public init(tools: [InspectedTool], inspectedAt: Date, overrides: [String: ToolAccess]? = nil) {
             self.tools = tools
             self.inspectedAt = inspectedAt
+            self.overrides = overrides
         }
     }
 

@@ -37,7 +37,7 @@ struct MenuBarContent: View {
                     Label {
                         Text("\(config.servers[name]?.title ?? name) — \(detail(state))")
                     } icon: {
-                        Image(nsImage: icon(state))
+                        Image(nsImage: Presentation.appIcon(name: name, server: config.servers[name]) ?? icon(state))
                     }
                 }
                 .disabled(state == .off)

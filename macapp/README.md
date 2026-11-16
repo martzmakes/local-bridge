@@ -101,6 +101,14 @@ At run time:
   `PUT /api/machines/<machine>`, writes `"account"` into the config and starts the daemon. If the
   daemon later reports `auth_refused` or `no_account`, the app registers again by itself, at most
   once a minute.
+- Add Server opens on what other apps on this Mac already have (Claude Code, Claude Desktop,
+  Cursor, Windsurf, VS Code, Codex). Those files are only read, and only when that sheet is
+  opened. Env and header values are carried into the config when a server is imported and are
+  never shown.
+- Each tool has a Try… button that runs it once on this Mac through `cli.mjs call`. The result is
+  shown in the sheet and kept nowhere.
+- Activity is kept across launches in `<state dir>/activity.jsonl` (the last 500 calls; times,
+  names, outcomes and durations only).
 - Save validates, writes, and restarts the daemon. The daemon is restarted with backoff
   (1 s doubling to 60 s) when it exits, stopped with SIGTERM then SIGKILL after 5 s, and stopped
   when the app quits (also on SIGTERM and SIGINT).
@@ -117,8 +125,7 @@ At run time:
   are shown in a secure field once saved.
 - If the app is killed with SIGKILL or crashes, the daemon child keeps running. The next launch
   notices it and offers to stop it; it is not reaped automatically.
-- Activity is kept in memory (the last 200 calls) and starts empty each launch. The daemon's
-  output is not written to a log file by the app.
+- The daemon's own output is not written to a log file by the app.
 - A server's name cannot be changed after it is added (it is the address). Remove and add again.
 - `concurrency`, `callTimeoutMs` and `cwd` have no controls. They are preserved when present.
 - No bundled Node, no auto-update, no DMG.

@@ -59,6 +59,50 @@ public struct ActivityBuffer: Sendable, Equatable {
     }
 }
 
+extension ActivityBuffer {
+    /// How much one server was used: calls since midnight and when the last one was.
+    public func usage(ofServer server: String, now: Date = Date(), calendar: Calendar = .current) -> (today: Int, last: Date)? {
+        let calls = entries.filter { $0.server == server }
+        guard let last = calls.map(\.time).max() else { return nil }
+        let midnight = calendar.startOfDay(for: now)
+        return (calls.filter { $0.time >= midnight }.count, last)
+    }
+}
+
+/// The call lines kept across launches. They hold times, names, outcomes and durations, never content.
+public struct ActivityStore: Sendable {
+    public static let maxLines = 500
+
+    public let url: URL
+
+    public init(url: URL) {
+        self.url = url
+    }
+
+    /// The kept lines, oldest first.
+    public func load() -> [String] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return Array(text.split(whereSeparator: \.isNewline).map(String.init).suffix(ActivityStore.maxLines))
+    }
+
+    /// Adds one call line. The file is cut back to the newest lines once it has grown a fifth over the cap.
+    public func append(_ line: String) {
+        guard ActivityParser.parse(line: line) != nil else { return }
+        var lines = load()
+        let needsTrim = lines.count >= ActivityStore.maxLines
+        lines.append(line)
+        if needsTrim || !FileManager.default.fileExists(atPath: url.path) {
+            let kept = lines.suffix(ActivityStore.maxLines).joined(separator: "\n") + "\n"
+            try? AtomicFile.write(Data(kept.utf8), to: url, mode: 0o600)
+            return
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data((line + "\n").utf8))
+    }
+}
+
 /// Turns a byte stream into whole lines. A line longer than the cap is dropped, not buffered forever.
 public struct LineSplitter: Sendable {
     private var pending = Data()

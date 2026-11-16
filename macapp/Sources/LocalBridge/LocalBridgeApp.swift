@@ -27,7 +27,7 @@ struct LocalBridgeApp: App {
                 .onOpenURL { model.handleCallback($0) }
                 .frame(minWidth: 760, minHeight: 480)
         }
-        .defaultSize(width: 940, height: 640)
+        .defaultSize(width: 960, height: 720)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Add Server…") { model.showingAddServer = true }
@@ -35,7 +35,7 @@ struct LocalBridgeApp: App {
                     .disabled(model.phase != .signedIn || model.isReadOnly)
             }
             CommandGroup(replacing: .saveItem) {
-                Button("Save") { model.save() }
+                Button("Save") { model.requestSave() }
                     .keyboardShortcut("s")
                     .disabled(!model.isDirty || model.isReadOnly)
                 Button("Revert") { model.revert() }

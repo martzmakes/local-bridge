@@ -58,7 +58,7 @@ struct MainView: View {
                     ToolbarItemGroup(placement: .primaryAction) {
                         Button("Revert") { model.revert() }
                             .help("Discard the changes you have not saved")
-                        Button("Save") { model.save() }
+                        Button("Save") { model.requestSave() }
                             .buttonStyle(.borderedProminent)
                             .keyboardShortcut(.defaultAction)
                             .help("Save and restart the bridge. Calls in progress fail.")
@@ -66,8 +66,16 @@ struct MainView: View {
                 }
             }
         }
-        .sheet(isPresented: $model.showingAddServer) {
-            AddServerSheet()
+        .sheet(isPresented: $model.showingAddServer, onDismiss: { model.addServerStartsManual = false }) {
+            AddServerSheet(startManually: model.addServerStartsManual)
+        }
+        .sheet(item: $model.tryingTool) { target in
+            TryToolSheet(target: target)
+        }
+        .confirmationDialog("Save and restart the bridge?", isPresented: $model.confirmingSave) {
+            Button("Save and Restart") { model.save() }
+        } message: {
+            Text("An agent used the bridge \(model.secondsSinceLastCall.map { "\($0) seconds" } ?? "moments") ago. Saving restarts it, and a call that is still running will fail.")
         }
         .confirmationDialog(
             "Remove “\(confirmingRemoval ?? "")”?",
@@ -101,10 +109,16 @@ struct MainView: View {
                 ContentUnavailableView {
                     Label("No Servers Yet", systemImage: "server.rack")
                 } description: {
-                    Text("Add an MCP server that runs on this Mac. It gets its own connector URL that your agents can use from anywhere.")
+                    Text("Local Bridge can pick up the MCP servers you already use in Claude, Cursor and other apps on this Mac. Each gets its own connector URL that your agents can use from anywhere.")
                 } actions: {
-                    Button("Add Server…") { model.showingAddServer = true }
+                    Button("Add Servers from This Mac…") { model.showingAddServer = true }
+                        .buttonStyle(.borderedProminent)
                         .disabled(model.isReadOnly)
+                    Button("Add Manually…") {
+                        model.addServerStartsManual = true
+                        model.showingAddServer = true
+                    }
+                    .disabled(model.isReadOnly)
                 }
                 .navigationTitle("Local Bridge")
             } else {
@@ -122,9 +136,12 @@ struct ServerSidebarRow: View {
     var body: some View {
         let server = model.draft.servers[name]
         HStack(spacing: 6) {
-            Label(server?.title?.isEmpty == false ? server!.title! : name,
-                  systemImage: Presentation.symbol(name: name, server: server))
-                .lineLimit(1)
+            Label {
+                Text(server?.title?.isEmpty == false ? server!.title! : name)
+                    .lineLimit(1)
+            } icon: {
+                ServerIcon(name: name, server: server)
+            }
             Spacer(minLength: 4)
             StatusIndicator(state: server?.isEnabled == false ? .off : model.runState(for: name))
         }

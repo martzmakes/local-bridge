@@ -72,6 +72,52 @@ enum Presentation {
     }
 }
 
+extension Presentation {
+    /// "12 calls today, last 3 minutes ago", or "Not used yet".
+    static func usage(_ usage: (today: Int, last: Date)?) -> String {
+        guard let usage else { return "Not used yet" }
+        let last = usage.last.formatted(.relative(presentation: .named))
+        if usage.today == 0 { return "Last used \(last)" }
+        return "\(usage.today) \(usage.today == 1 ? "call" : "calls") today, last \(last)"
+    }
+
+    /// The icon of the Mac app a server is about, when there is one.
+    @MainActor
+    static func appIcon(name: String, server: ServerConfig?) -> NSImage? {
+        guard let server, let bundleID = AppIdentity.bundleID(for: server, name: name) else { return nil }
+        if let cached = iconCache[bundleID] { return cached }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        icon.size = NSSize(width: 18, height: 18)
+        iconCache[bundleID] = icon
+        return icon
+    }
+
+    @MainActor private static var iconCache: [String: NSImage] = [:]
+}
+
+/// A server's icon: the real app's when the server is about one, a symbol otherwise.
+struct ServerIcon: View {
+    var name: String
+    var server: ServerConfig?
+    var size: CGFloat = 18
+
+    var body: some View {
+        if let icon = Presentation.appIcon(name: name, server: server) {
+            Image(nsImage: icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: size, height: size)
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: Presentation.symbol(name: name, server: server))
+                .foregroundStyle(.secondary)
+                .frame(width: size, height: size)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 /// A server's state as a small mark that does not rely on colour alone.
 struct StatusIndicator: View {
     var state: ServerRunState

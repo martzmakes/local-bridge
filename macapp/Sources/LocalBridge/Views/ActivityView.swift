@@ -11,7 +11,7 @@ struct ActivityView: View {
                 ContentUnavailableView {
                     Label("No Calls Yet", systemImage: "clock.arrow.circlepath")
                 } description: {
-                    Text("Calls that agents make through the bridge appear here: when, which tool, and how it ended. Never what was asked or returned. The list starts again each time the app opens.")
+                    Text("Calls that agents make through the bridge appear here: when, which tool, and how it ended. Never what was asked or returned. The last 500 are kept.")
                 }
             } else {
                 Table(entries) {
@@ -19,21 +19,23 @@ struct ActivityView: View {
                         Text(entry.time.formatted(date: .omitted, time: .standard))
                             .monospacedDigit()
                     }
-                    .width(min: 80, ideal: 95)
+                    .width(min: 80, ideal: 90)
                     TableColumn("Server") { entry in
                         Text(model.saved?.servers[entry.server]?.title ?? entry.server)
                     }
-                    .width(min: 80, ideal: 130)
+                    .width(min: 80, ideal: 110)
                     TableColumn("Tool") { entry in
                         Text(entry.tool)
                             .font(.body.monospaced())
+                            .help(entry.tool)
                     }
+                    .width(min: 150, ideal: 220)
                     TableColumn("Outcome") { entry in
                         Label(Presentation.outcome(entry.outcome),
                               systemImage: entry.succeeded ? "checkmark.circle" : "exclamationmark.triangle")
                             .foregroundStyle(entry.succeeded ? Color.secondary : Color.red)
                     }
-                    .width(min: 110, ideal: 150)
+                    .width(min: 110, ideal: 140)
                     TableColumn("Duration") { entry in
                         Text(Presentation.duration(milliseconds: entry.milliseconds))
                             .monospacedDigit()

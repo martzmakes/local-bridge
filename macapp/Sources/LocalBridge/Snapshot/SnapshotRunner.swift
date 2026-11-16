@@ -141,22 +141,40 @@ enum SnapshotRunner {
         withoutExtras.servers["ha"] = nil
         sheetState.saved = withoutExtras
 
+        var importState = empty
+        importState.discovery = SampleData.discovery
+        var importEmptyState = empty
+        importEmptyState.discovery = DiscoveryResult()
+
         let menu: (AppModel) -> AnyView = { model in AnyView(MenuSnapshot().environment(model)) }
 
         return [
             mainScreen("signin", signedOut, size: NSSize(width: 940, height: 640)),
             mainScreen("first-run-machine-name", naming, size: NSSize(width: 940, height: 640)),
-            mainScreen("main-notes", SampleData.populated(), size: NSSize(width: 980, height: 1000)),
+            mainScreen("main-notes", SampleData.populated(), size: NSSize(width: 980, height: 960)),
             mainScreen("main-ha-down", SampleData.populated(selection: .server("ha"))),
             mainScreen("main-empty", empty, size: NSSize(width: 940, height: 640)),
-            mainScreen("main-unsaved", unsaved, size: NSSize(width: 980, height: 1000)),
+            mainScreen("main-unsaved", unsaved, size: NSSize(width: 980, height: 960)),
             mainScreen("main-node-missing", nodeMissing),
             mainScreen("activity", SampleData.populated(selection: .activity), size: NSSize(width: 940, height: 640)),
+            Screen(name: "add-server-import", chrome: .sheet, state: importState) { model in
+                AnyView(AddServerSheet().environment(model))
+            },
+            Screen(name: "add-server-import-empty", chrome: .sheet, state: importEmptyState) { model in
+                AnyView(AddServerSheet().environment(model))
+            },
             Screen(name: "add-server", chrome: .sheet, state: sheetState) { model in
-                AnyView(AddServerSheet(name: "calendar", server: stdioDraft).environment(model))
+                AnyView(AddServerSheet(startManually: true, name: "calendar", server: stdioDraft).environment(model))
             },
             Screen(name: "add-server-remote", chrome: .sheet, state: sheetState) { model in
-                AnyView(AddServerSheet(name: "ha", server: remoteDraft).environment(model))
+                AnyView(AddServerSheet(startManually: true, name: "ha", server: remoteDraft).environment(model))
+            },
+            Screen(name: "try-tool", chrome: .sheet, state: SampleData.populated()) { model in
+                let tool = model.toolGroups(for: "notes").read.first { $0.name == "search_notes" }!
+                return AnyView(TryToolSheet(
+                    target: TryTarget(server: "notes", tool: tool),
+                    values: ["query": "packing", "folder": "", "limit": "10"],
+                    outcome: .finished(SampleData.searchNotesResult)).environment(model))
             },
             settings("settings-general", .general) { AnyView(GeneralSettings().environment($0)) },
             settings("settings-account", .account) { AnyView(AccountSettings().environment($0)) },
