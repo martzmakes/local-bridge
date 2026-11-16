@@ -15,21 +15,21 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { verifyJwt } from "../auth/lib/jwt";
 import { GoneError } from "../bridge/dispatch";
-import { isValidAgentId } from "../bridge/names";
+import { isValidAgentId, isValidName } from "../bridge/names";
 import { ConnectionGone, errName, getSecret, getStore, logEvent, pushToConnection } from "../bridge/runtime";
-import { callTool, listTools, type BridgeDeps, type Caller } from "./bridge";
+import { callTool, findServer, listTools, type BridgeDeps, type Caller, type Scope } from "./bridge";
 
 const PROJECT_SLUG = process.env.PROJECT_SLUG!;
 const DOMAIN = process.env.DOMAIN!;
 const MCP_PUBLIC_BASE = process.env.MCP_PUBLIC_BASE || `https://${DOMAIN}`;
-const DEFAULT_AGENT = "connector";
 const MAX_BODY_BYTES = 131_072;
 
 const SERVER_INFO = { name: PROJECT_SLUG, title: "Local Bridge", version: "0.1.0" };
+const OFFLINE_NOTE =
+  "The machine can be asleep or offline: calls then fail within a few seconds with a clear error, and bridge_health reports what is up.";
 const INSTRUCTIONS =
   "Local Bridge forwards tool calls to MCP servers running on the owner's own Macs. Tool names are <machine>__<server>__<tool>. " +
-  "A machine can be asleep or offline: such calls fail within a few seconds with a clear error, and bridge_health reports which machines and servers are up. " +
-  "You only see tools this connection has been granted.";
+  OFFLINE_NOTE + " You only see tools this connection has been granted.";
 
 function deps(): BridgeDeps {
   const store = getStore();
@@ -96,7 +96,7 @@ function httpJson(statusCode: number, body: unknown, extra: Record<string, strin
 // Dispatch
 // ---------------------------------------------------------------------------
 
-export async function dispatch(caller: Caller, raw: unknown, d: BridgeDeps): Promise<JsonRpcResponse | null> {
+export async function dispatch(caller: Caller, raw: unknown, d: BridgeDeps, scope?: Scope): Promise<JsonRpcResponse | null> {
   if ((raw as { id?: unknown } | null)?.id === undefined && JSONRPCNotificationSchema.safeParse(raw).success) return null;
   const parsed = JSONRPCRequestSchema.safeParse(raw);
   if (!parsed.success) return rpcErr(null, -32600, "Invalid request");
@@ -108,6 +108,16 @@ export async function dispatch(caller: Caller, raw: unknown, d: BridgeDeps): Pro
       case "initialize": {
         const requested = (req.params as { protocolVersion?: string } | undefined)?.protocolVersion;
         const protocolVersion = requested && SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ? requested : LATEST_PROTOCOL_VERSION;
+        if (scope) {
+          // A server's own endpoint presents itself as that server.
+          const title = findServer(await d.listMachines(), scope)?.title ?? scope.server;
+          return ok(id, {
+            protocolVersion,
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: { name: `${scope.machine}-${scope.server}`, title: `${title} (${scope.machine})`, version: SERVER_INFO.version },
+            instructions: `"${title}" is an MCP server running on the owner's Mac "${scope.machine}", reached through Local Bridge. ${OFFLINE_NOTE}`,
+          });
+        }
         return ok(id, {
           protocolVersion,
           capabilities: { tools: { listChanged: false } },
@@ -118,11 +128,11 @@ export async function dispatch(caller: Caller, raw: unknown, d: BridgeDeps): Pro
       case "ping":
         return ok(id, {});
       case "tools/list":
-        return ok(id, { tools: await listTools(caller, d) });
+        return ok(id, { tools: await listTools(caller, d, scope) });
       case "tools/call": {
         const call = CallToolRequestSchema.safeParse(req);
         if (!call.success) return rpcErr(id, -32602, "Invalid tools/call parameters");
-        const result = await callTool(caller, call.data.params.name, (call.data.params.arguments ?? {}) as Record<string, unknown>, d);
+        const result = await callTool(caller, call.data.params.name, (call.data.params.arguments ?? {}) as Record<string, unknown>, d, scope);
         return ok(id, result);
       }
       case "resources/list":
@@ -145,15 +155,20 @@ export async function dispatch(caller: Caller, raw: unknown, d: BridgeDeps): Pro
 // Auth
 // ---------------------------------------------------------------------------
 
-/** Agent named by the request path: /mcp is "connector", /mcp/a/<id> is <id>. null if the path is neither. */
-export function agentFromPath(rawPath: string): string | null {
+/**
+ * What a request path addresses: /mcp is the aggregate endpoint (no scope),
+ * /mcp/<machine>/<server> is one local server. null if the path is neither.
+ */
+export function scopeFromPath(rawPath: string): { scope?: Scope } | null {
   const path = rawPath.replace(/\/+$/, "");
-  if (path === "/mcp") return DEFAULT_AGENT;
-  const m = /^\/mcp\/a\/([^/]+)$/.exec(path);
-  return m && isValidAgentId(m[1]) ? m[1] : null;
+  if (path === "/mcp") return {};
+  const m = /^\/mcp\/([^/]+)\/([^/]+)$/.exec(path);
+  if (!m || !isValidName(m[1]) || !isValidName(m[2])) return null;
+  return { scope: { machine: m[1], server: m[2] } };
 }
 
-export async function authenticate(authHeader: string | undefined, pathAgent: string, explicitPath: boolean): Promise<Caller | null> {
+/** Auth is shared: any valid bridge token works on every endpoint. What it may do there is policy. */
+export async function authenticate(authHeader: string | undefined): Promise<Caller | null> {
   const match = /^Bearer\s+(.+)$/i.exec(authHeader ?? "");
   if (!match) return null;
   let claims;
@@ -164,15 +179,11 @@ export async function authenticate(authHeader: string | undefined, pathAgent: st
   }
   // The web sign-in session JWT has no agent and is not a bridge credential.
   if (!claims.agent || !claims.kind || !isValidAgentId(claims.agent)) return null;
-  // A connector grant is bound to the URL it was approved for. A minted token
-  // is its own identity and may use the bare /mcp URL, but on an agent URL it
-  // must be that agent.
-  if ((claims.kind === "oauth" || explicitPath) && claims.agent !== pathAgent) return null;
   return { agent: claims.agent, tokenKind: claims.kind, tv: claims.tv };
 }
 
-function unauthorized(pathAgent: string) {
-  const suffix = pathAgent === DEFAULT_AGENT ? "/mcp" : `/mcp/a/${pathAgent}`;
+function unauthorized(scope?: Scope) {
+  const suffix = scope ? `/mcp/${scope.machine}/${scope.server}` : "/mcp";
   // RFC 9728: point clients at the metadata for this exact resource.
   const wwwAuth = `Bearer resource_metadata="${MCP_PUBLIC_BASE}/.well-known/oauth-protected-resource${suffix}"`;
   return httpJson(401, { jsonrpc: "2.0", id: null, error: { code: -32001, message: "Unauthorized" } }, { "www-authenticate": wwwAuth });
@@ -186,8 +197,9 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   const method = event.requestContext.http.method;
   if (method === "OPTIONS") return { statusCode: 204, headers: corsHeaders(), body: "" };
 
-  const pathAgent = agentFromPath(event.rawPath || "");
-  if (!pathAgent) return httpJson(404, { error: "not_found" });
+  const target = scopeFromPath(event.rawPath || "");
+  if (!target) return httpJson(404, { error: "not_found" });
+  const scope = target.scope;
 
   // We do not push server-initiated messages, so there is no SSE stream to open.
   if (method === "GET") return httpJson(405, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Streaming GET not supported" } }, { allow: "POST" });
@@ -195,9 +207,8 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   if (method === "DELETE") return { statusCode: 204, headers: corsHeaders(), body: "" };
   if (method !== "POST") return httpJson(405, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Method not allowed" } });
 
-  const explicitPath = (event.rawPath || "").replace(/\/+$/, "") !== "/mcp";
-  const caller = await authenticate(event.headers?.authorization || event.headers?.Authorization, pathAgent, explicitPath);
-  if (!caller) return unauthorized(pathAgent);
+  const caller = await authenticate(event.headers?.authorization || event.headers?.Authorization);
+  if (!caller) return unauthorized(scope);
 
   const body = event.isBase64Encoded ? Buffer.from(event.body ?? "", "base64").toString("utf8") : (event.body ?? "");
   if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
@@ -222,11 +233,11 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     if (parsed.length > 10) return httpJson(400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Batch too large" } });
     const results: JsonRpcResponse[] = [];
     for (const item of parsed) {
-      const r = await dispatch(caller, item, d);
+      const r = await dispatch(caller, item, d, scope);
       if (r) results.push(r);
     }
     return results.length ? httpJson(200, results, sessionHeader) : accepted;
   }
-  const result = await dispatch(caller, parsed, d);
+  const result = await dispatch(caller, parsed, d, scope);
   return result ? httpJson(200, result, sessionHeader) : accepted;
 };

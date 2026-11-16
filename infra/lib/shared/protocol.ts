@@ -26,6 +26,8 @@ export type ToolInfo = z.infer<typeof ToolInfoSchema>;
 
 export const ServerInfoSchema = z.object({
   name: NameSchema,
+  /** Display name set in the machine's app, shown to MCP clients. */
+  title: z.string().max(64).optional(),
   status: z.enum(["up", "down"]),
   error: z.string().max(500).optional(),
   tools: z.array(ToolInfoSchema).max(500),

@@ -266,50 +266,38 @@ async function deleteAuthRequest(authCode: string) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Agent binding (Local Bridge)
+// Resources (Local Bridge)
 //
-// Each bridge agent has its own MCP URL: /mcp is the agent "connector",
-// /mcp/a/<id> is the agent <id>. Clients send that URL as the RFC 8707
-// `resource` parameter on /oauth/authorize; the agent it names is recorded in
-// the granted scope as `agent:<id>` (so refresh tokens carry it unchanged) and
-// minted into the access token's `agent` claim.
+// Every MCP endpoint is its own protected resource: /mcp (all servers) and
+// /mcp/<machine>/<server> (one local server). They share this authorization
+// server and its tokens: a grant made for one endpoint works on all of them.
+// Every connector sign-in is the built-in agent "owner"; which tools exist on
+// an endpoint is decided on the Mac, in the app.
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_AGENT = "connector";
-const AGENT_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+export const OWNER_AGENT = "owner";
+const NAME = "[a-z0-9]{1,16}";
+const RESOURCE_PATH_RE = new RegExp(`^/mcp(/${NAME}/${NAME})?$`);
 
-/** Agent named by a resource URL, or null if the URL is not one of this server's MCP URLs. */
-export function agentFromResource(resource: string | undefined, baseUrl: string): string | null {
-  if (!resource) return DEFAULT_AGENT;
+/** The path of a resource URL if it is one of this server's MCP endpoints, else null. */
+export function resourcePath(resource: string | undefined, baseUrl: string): string | null {
+  if (!resource) return "/mcp";
   const r = resource.replace(/\/+$/, "");
-  if (r === baseUrl || r === `${baseUrl}/mcp`) return DEFAULT_AGENT;
-  const prefix = `${baseUrl}/mcp/a/`;
-  if (r.startsWith(prefix)) {
-    const id = r.slice(prefix.length);
-    if (AGENT_ID_RE.test(id)) return id;
-  }
-  return null;
+  if (r === baseUrl) return "/mcp";
+  if (!r.startsWith(`${baseUrl}/`)) return null;
+  const path = r.slice(baseUrl.length);
+  return RESOURCE_PATH_RE.test(path) ? path : null;
 }
 
-/** Client-requested scope with any agent: entries removed, plus the bound agent. */
-export function scopeWithAgent(scope: string | undefined, agent: string): string {
-  const base = (scope || "mcp:read mcp:tools").split(/\s+/).filter((s) => s && !s.startsWith("agent:"));
-  return [...base, `agent:${agent}`].join(" ");
+/** Client-requested scope with any agent: entries removed; a client never picks its agent. */
+export function cleanScope(scope: string | undefined): string {
+  const kept = (scope || "mcp:read mcp:tools").split(/\s+/).filter((x) => x && !x.startsWith("agent:"));
+  return kept.length ? kept.join(" ") : "mcp:read mcp:tools";
 }
 
-export function agentFromScope(scope: string): string {
-  const entry = scope.split(/\s+/).find((s) => s.startsWith("agent:"));
-  const id = entry ? entry.slice("agent:".length) : DEFAULT_AGENT;
-  return AGENT_ID_RE.test(id) ? id : DEFAULT_AGENT;
-}
-
-function publicScope(scope: string): string {
-  return scope.split(/\s+/).filter((s) => s && !s.startsWith("agent:")).join(" ");
-}
-
-function protectedResourceMetadata(baseUrl: string, agent: string = DEFAULT_AGENT) {
+function protectedResourceMetadata(baseUrl: string, path: string = "/mcp") {
   return {
-    resource: agent === DEFAULT_AGENT ? `${baseUrl}/mcp` : `${baseUrl}/mcp/a/${agent}`,
+    resource: `${baseUrl}${path}`,
     authorization_servers: [baseUrl],
     scopes_supported: ["mcp:read", "mcp:tools"],
     bearer_methods_supported: ["header"],
@@ -395,8 +383,9 @@ async function handleAuthorize(
     resource,
   } = params;
 
-  const agent = agentFromResource(resource, baseUrl);
-  if (!agent) return errorJson("invalid_target", "resource is not an MCP URL of this server");
+  if (resourcePath(resource, baseUrl) === null) {
+    return errorJson("invalid_target", "resource is not an MCP URL of this server");
+  }
 
   if (!client_id) return errorJson("invalid_request", "client_id is required");
   if (!redirect_uri) return errorJson("invalid_request", "redirect_uri is required");
@@ -423,8 +412,7 @@ async function handleAuthorize(
       "redirect_uri is not registered for this client"
     );
   }
-  // The consent and sign-in pages show which bridge agent this grant binds to.
-  const clientName = `${client.clientName || "Application"} (bridge agent: ${agent})`;
+  const clientName = client.clientName || "Application";
 
   const authCode = randomUUID();
   const authRequest: AuthRequest = {
@@ -434,7 +422,7 @@ async function handleAuthorize(
     codeChallenge: code_challenge,
     codeChallengeMethod: code_challenge_method,
     state,
-    scope: scopeWithAgent(scope, agent),
+    scope: cleanScope(scope),
     approved: false,
     expiresAt: Date.now() + AUTH_CODE_TTL_SECONDS * 1000,
     createdAt: Date.now(),
@@ -674,17 +662,14 @@ async function handleAuthorizationCodeGrant(body: Record<string, string>) {
 
   await deleteAuthRequest(code); // single-use
 
-  const accessToken = await mintJwt(authRequest.email, {
-    agent: agentFromScope(authRequest.scope),
-    kind: "oauth",
-  });
+  const accessToken = await mintJwt(authRequest.email, { agent: OWNER_AGENT, kind: "oauth" });
   const refreshToken = await issueRefreshToken(ddb, OAUTH_TABLE, {
     email: authRequest.email,
     clientId: authRequest.clientId,
     scope: authRequest.scope,
   });
 
-  return tokenResponse(accessToken, refreshToken, publicScope(authRequest.scope));
+  return tokenResponse(accessToken, refreshToken, authRequest.scope);
 }
 
 // refresh_token grant (OAuth 2.1, RFC 6749 §6) with rotation: the presented
@@ -717,10 +702,10 @@ async function handleRefreshTokenGrant(body: Record<string, string>) {
       "refresh token was not issued to this client"
     );
   }
-  const accessToken = await mintJwt(rec.email, { agent: agentFromScope(rec.scope), kind: "oauth" });
+  const accessToken = await mintJwt(rec.email, { agent: OWNER_AGENT, kind: "oauth" });
   console.log("oauth_refresh_ok", { client_id });
 
-  return tokenResponse(accessToken, rec.rotatedRefreshToken, publicScope(rec.scope));
+  return tokenResponse(accessToken, rec.rotatedRefreshToken, rec.scope);
 }
 
 // ---------------------------------------------------------------------------
@@ -903,12 +888,12 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     if (path === "/.well-known/oauth-protected-resource") {
       return json(200, protectedResourceMetadata(baseUrl));
     }
-    // Path-specific metadata (RFC 9728 section 3.1): one document per agent URL.
+    // Path-specific metadata (RFC 9728 section 3.1): one document per endpoint.
     const PRM_PREFIX = "/.well-known/oauth-protected-resource/";
     if (path.startsWith(PRM_PREFIX)) {
-      const agent = agentFromResource(`${baseUrl}/${path.slice(PRM_PREFIX.length)}`, baseUrl);
-      if (!agent) return errorJson("not_found", "Unknown resource", 404);
-      return json(200, protectedResourceMetadata(baseUrl, agent));
+      const resource = resourcePath(`${baseUrl}/${path.slice(PRM_PREFIX.length)}`, baseUrl);
+      if (!resource) return errorJson("not_found", "Unknown resource", 404);
+      return json(200, protectedResourceMetadata(baseUrl, resource));
     }
     if (path === "/.well-known/oauth-authorization-server") {
       return json(200, authorizationServerMetadata(baseUrl));

@@ -2,13 +2,13 @@
 
 Remote MCP server at `https://bridge.martzmakes.com/mcp` that forwards tool calls from cloud agents to MCP servers on Matt's Macs. Cut from `martzmakes/expo-cdk-stack` by way of the Skylight repo (Stripe and paywall removed). Deploys are local; there is no CI by choice.
 
-Read `docs/superpowers/specs/2026-11-15-local-bridge-design.md` before changing behaviour. It is the source of truth for the security model.
+Read both specs before changing behaviour: `docs/superpowers/specs/2026-11-15-local-bridge-design.md` (v1) and `docs/superpowers/specs/2026-11-15-mac-app-per-server-endpoints-design.md` (v2, wins where they differ). Together they are the source of truth for the security model.
 
 ## Security invariants (do not weaken without Matt saying so)
 
-- Default deny. An agent with no rule for a tool cannot list or call it.
+- The Mac's app is the control. A tool exists for the cloud only if it is switched on there (the daemon config's `read`/`write` lists). Write tools start off.
+- The built-in agent `owner` (every connector sign-in) may use whatever a machine announces. Every other agent is default deny: with no rule for a tool it cannot list or call it.
 - A write tool needs an exact rule with `access: "write"`. A wildcard rule never grants a write tool. `policy.ts` `decide()` and `RuleSchema` both enforce this.
-- A tool is also gated on the Mac by the agent config's `read`/`write` lists. Cloud policy cannot expose a tool the Mac's config does not.
 - No message, note or argument content in logs or audit rows. Lambdas log only through `logEvent()` in `bridge/runtime.ts` with scalar ids, sizes and fixed codes. Never log an `err.message` from a local server or a request/response body. Machine error text is replaced by fixed wording in `dispatch.ts` except for codes whose messages the agent composes without content.
 - Result filters fail closed: if a rule's filter cannot be applied, the result is withheld.
 - A call whose audit row cannot be written returns no data.
@@ -24,7 +24,8 @@ Read `docs/superpowers/specs/2026-11-15-local-bridge-design.md` before changing 
 - `infra/lib/lambdas/ws/`: `authorizer.ts` (`$connect`), `handler.ts` (`$connect`, `$disconnect`, `$default`).
 - `infra/lib/lambdas/auth/`, `oauth/`: the template's magic link and OAuth 2.1, plus the agent binding in `oauth/handler.ts` (`agentFromResource`, `scopeWithAgent`).
 - `infra/scripts/`: `admin.ts`, `mint.ts`, `env.ts`.
-- `agent/`: the launchd daemon. Its own `package.json`.
+- `agent/`: the Node daemon. Its own `package.json`. Interface to the app (`inspect`, `status.json`) is v2 spec section 5.
+- `macapp/`: the SwiftUI app. SwiftPM, `LocalBridgeCore` (testable, no UI) and `LocalBridge`. Runs the daemon as a child so macOS privacy grants belong to the signed app.
 - `app/`: the template's Expo app, used only as the sign-in landing page.
 
 ## Commands
@@ -33,6 +34,7 @@ Read `docs/superpowers/specs/2026-11-15-local-bridge-design.md` before changing 
 # Tests and typecheck
 cd infra && npx tsc --noEmit && npx jest
 cd agent && npx tsc --noEmit && npm test
+cd macapp && swift test && ./scripts/build-app.sh
 
 # Deploy (web bundle first if app/ changed; see docs/setup.md)
 cd infra && AWS_PROFILE=your-profile AWS_REGION=us-east-1 \
@@ -48,7 +50,8 @@ cd infra && AWS_PROFILE=your-profile npm run mint -- <agent>
 
 - TypeScript strict, Zod at every boundary (HTTP body, WebSocket frame, DynamoDB rule rows, agent config).
 - Pure logic (`names`, `policy`, `audit`, `ratelimit`, `dispatch`, `device-auth`, `mcp/bridge`) takes its I/O as injected deps and is tested without AWS. Keep it that way.
-- Canonical tool ids are dotted (`mini.notes.search_notes`) in rules, audit and health. Wire names use `__` because Anthropic and OpenAI reject dots in tool names. Never parse a wire name; look it up in the catalog.
+- Canonical tool ids are dotted (`mini.notes.search_notes`) in rules, audit and health. On the aggregate `/mcp`, wire names use `__` because Anthropic and OpenAI reject dots in tool names. On a server's own endpoint (`/mcp/<machine>/<server>`) names pass through untouched. Never parse a client-facing name; look it up in the catalog.
+- Auth is shared across endpoints: any valid bridge token is accepted on any endpoint, and what it may do there is policy (`authorize()` in `mcp/bridge.ts`).
 - JWTs: HS256, SSM `/local-bridge/jwt-secret`. Bridge tokens carry `agent` and `kind`; minted ones also `tv`. A JWT without `agent` (the web session) is not accepted by `/mcp`.
 - The MCP Lambda is the template's stateless JSON-RPC handler, with `@modelcontextprotocol/sdk` schemas for validation. The SDK server transport is not used in Lambda; the agent uses the SDK client.
 

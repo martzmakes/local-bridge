@@ -393,10 +393,10 @@ export class LocalBridgeStack extends cdk.Stack {
       ),
     });
 
-    // Per-agent MCP URLs: /mcp/a/<agent>. A connector signed in at one of
-    // these is bound to that agent (see lambdas/oauth/handler.ts).
+    // One MCP endpoint per local server: /mcp/<machine>/<server>. Same auth
+    // as /mcp; the endpoint exposes that server's tools under their own names.
     authHttpApi.addRoutes({
-      path: "/mcp/a/{agent}",
+      path: "/mcp/{machine}/{server}",
       methods: [
         apigwv2.HttpMethod.POST,
         apigwv2.HttpMethod.GET,
@@ -404,7 +404,7 @@ export class LocalBridgeStack extends cdk.Stack {
         apigwv2.HttpMethod.OPTIONS,
       ],
       integration: new apigwv2Integrations.HttpLambdaIntegration(
-        "McpAgentIntegration",
+        "McpServerEndpointIntegration",
         mcpHandler
       ),
     });

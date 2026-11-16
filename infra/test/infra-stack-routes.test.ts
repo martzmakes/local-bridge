@@ -34,12 +34,12 @@ describe("LocalBridgeStack", () => {
     template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: `POST ${path}` });
   });
 
-  it("routes POST /mcp and the per-agent URL to the MCP handler", () => {
+  it("routes POST /mcp and the per-server endpoint to the MCP handler", () => {
     template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "POST /mcp" });
-    template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "POST /mcp/a/{agent}" });
+    template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "POST /mcp/{machine}/{server}" });
   });
 
-  it("serves per-agent protected-resource metadata", () => {
+  it("serves per-endpoint protected-resource metadata", () => {
     template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "GET /.well-known/oauth-protected-resource/{proxy+}" });
   });
 

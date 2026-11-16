@@ -226,3 +226,81 @@ describe("tools/call", () => {
     ]);
   });
 });
+
+describe("per-server endpoints", () => {
+  const owner = { agent: "owner", tokenKind: "oauth" as const };
+  const notes = { machine: "mini", server: "notes" };
+
+  it("lists one server's tools under their original names, descriptions and schemas", async () => {
+    const tools = await listTools(owner, world().deps, notes);
+    expect(tools.map((t) => t.name)).toEqual(["bridge_health", "search_notes", "get_note", "create_note"]);
+    expect(tools[1]).toEqual({ name: "search_notes", description: "Search notes.", inputSchema: schema, annotations: { readOnlyHint: true } });
+    expect(tools[3].annotations).toEqual({ readOnlyHint: false });
+  });
+
+  it("lets the owner use everything the machine announces without any rules, and audits it", async () => {
+    const w = world();
+    expect((await callTool(owner, "search_notes", { query: "q" }, w.deps, notes)).isError).toBe(false);
+    expect((await callTool(owner, "create_note", { title: "t" }, w.deps, notes)).isError).toBe(false);
+    expect(w.pushed.map((m) => m.type === "call" && [m.server, m.tool])).toEqual([["notes", "search_notes"], ["notes", "create_note"]]);
+    expect(w.audit.map((a) => [a.agent, a.tool, a.outcome])).toEqual([
+      ["owner", "mini.notes.search_notes", "ok"],
+      ["owner", "mini.notes.create_note", "ok"],
+    ]);
+  });
+
+  it("does not let one endpoint reach another server's tools", async () => {
+    const w = world();
+    const out = await callTool(owner, "search_messages", {}, w.deps, notes);
+    expect(out.isError).toBe(true);
+    expect(w.pushed).toHaveLength(0);
+    // The namespaced name from the aggregate endpoint does not work here either.
+    expect((await callTool(owner, "mini__messages__search_messages", {}, w.deps, notes)).isError).toBe(true);
+    expect(w.pushed).toHaveLength(0);
+  });
+
+  it("answers clearly for an endpoint whose server is not registered", async () => {
+    const w = world();
+    const gone = { machine: "mini", server: "gone" };
+    expect((await listTools(owner, w.deps, gone)).map((t) => t.name)).toEqual(["bridge_health"]);
+    const out = await callTool(owner, "anything", {}, w.deps, gone);
+    expect(out.content[0].text).toMatch(/mini\/gone is not available/);
+    expect(w.audit[0]).toMatchObject({ outcome: "denied", reason: "unknown_endpoint", tool: "mini.gone.anything" });
+  });
+
+  it("still holds scoped agents to their rules on a server endpoint", async () => {
+    const w = world({ agents: { coach: { rules: [{ tool: "mini.notes.search_notes" }] } } });
+    const coach = { agent: "coach", tokenKind: "minted" as const, tv: 1 };
+    expect((await listTools(coach, w.deps, notes)).map((t) => t.name)).toEqual(["bridge_health", "search_notes"]);
+    expect((await callTool(coach, "get_note", {}, w.deps, notes)).isError).toBe(true);
+    expect((await callTool(coach, "create_note", {}, w.deps, notes)).isError).toBe(true);
+    expect(w.pushed).toHaveLength(0);
+  });
+
+  it("does not treat a minted token named owner as the owner unless the owner row exists", async () => {
+    const w = world();
+    const out = await callTool({ agent: "owner", tokenKind: "minted", tv: 1 }, "search_notes", {}, w.deps, notes);
+    expect(out.isError).toBe(true);
+    expect(w.audit[0]).toMatchObject({ outcome: "denied", reason: "agent_unknown" });
+  });
+
+  it("lets an owner row disable the owner or tighten its limits", async () => {
+    const off = world({ agents: { owner: { meta: { enabled: false }, rules: [] } } });
+    expect((await listTools(owner, off.deps, notes)).map((t) => t.name)).toEqual(["bridge_health"]);
+    const tight = world({ agents: { owner: { meta: { ratePerMinute: 1 }, rules: [] } } });
+    await callTool(owner, "search_notes", {}, tight.deps, notes);
+    expect((await callTool(owner, "search_notes", {}, tight.deps, notes)).content[0].text).toMatch(/rate limit/);
+  });
+
+  it("gives the owner the namespaced tools on the aggregate endpoint", async () => {
+    const tools = await listTools(owner, world().deps);
+    expect(tools.map((t) => t.name)).toContain("mini__notes__create_note");
+    expect(tools.map((t) => t.name)).toContain("mini__messages__search_messages");
+  });
+
+  it("scopes bridge_health to the endpoint's server", async () => {
+    const out = await callTool(owner, "bridge_health", {}, world().deps, notes);
+    const body = out.structuredContent as { machines: Array<{ servers: Array<{ server: string; toolsAvailableToYou: number }> }> };
+    expect(body.machines[0].servers).toEqual([{ server: "notes", status: "up", toolsAvailableToYou: 3 }]);
+  });
+});

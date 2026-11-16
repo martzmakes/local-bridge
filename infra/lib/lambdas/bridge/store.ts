@@ -74,6 +74,7 @@ export interface MachineMeta {
 export interface MachineServer {
   machine: string;
   name: string;
+  title?: string;
   status: "up" | "down";
   error?: string;
   tools: ToolInfo[];
@@ -299,7 +300,7 @@ export class Store {
       }
     }
     for (const s of servers) {
-      const server: MachineServer = { machine, name: s.name, status: s.status, error: s.error, tools: s.tools, updatedAt: now };
+      const server: MachineServer = { machine, name: s.name, title: s.title, status: s.status, error: s.error, tools: s.tools, updatedAt: now };
       await this.ddb.send(
         new PutCommand({ TableName: this.table, Item: { pk: "MACHINES", sk: `${machine}#SERVER#${s.name}`, server } })
       );

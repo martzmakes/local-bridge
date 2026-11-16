@@ -19,6 +19,19 @@ import {
 
 export const HEALTH_TOOL = "bridge_health";
 
+/**
+ * The built-in agent a connector sign-in acts as. The owner may use every tool
+ * a machine announces; what a machine announces is what its app has switched
+ * on, so the app is the control (v2 spec section 3). Other agents need rules.
+ */
+export const OWNER_AGENT = "owner";
+
+/** One local server's endpoint: /mcp/<machine>/<server>. Absent on the aggregate /mcp. */
+export interface Scope {
+  machine: string;
+  server: string;
+}
+
 export interface Caller {
   agent: string;
   tokenKind: "oauth" | "minted";
@@ -66,11 +79,22 @@ function isConnected(m: Machine, now: number): boolean {
 
 /** Agent state for a caller: usable only if the row exists, is enabled, and the token is current. */
 async function loadAgent(caller: Caller, deps: BridgeDeps): Promise<{ meta: AgentMeta; rules: Rule[] } | { denied: "agent_unknown" | "agent_disabled" | "token_revoked" }> {
-  const agent = await deps.getAgent(caller.agent);
+  let agent = await deps.getAgent(caller.agent);
+  // A connector sign-in needs no row: the owner exists implicitly with the
+  // default limits. A row named "owner" overrides those limits or disables it.
+  if (!agent && caller.agent === OWNER_AGENT && caller.tokenKind === "oauth") {
+    agent = { meta: { ...AGENT_DEFAULTS, id: OWNER_AGENT, createdAt: 0 }, rules: [] };
+  }
   if (!agent) return { denied: "agent_unknown" };
   if (!agent.meta.enabled) return { denied: "agent_disabled" };
   if (caller.tokenKind === "minted" && (caller.tv ?? 0) < agent.meta.tokenVersion) return { denied: "token_revoked" };
   return agent;
+}
+
+/** The allowlist decision for one tool. The owner is allowed whatever the machine announces. */
+function authorize(agent: { meta: AgentMeta; rules: Rule[] }, ref: ToolRef, access: ToolInfo["access"]): ReturnType<typeof decide> {
+  if (agent.meta.id === OWNER_AGENT) return { allowed: true, rule: { tool: canonicalId(ref), access } };
+  return decide(agent.rules, ref, access);
 }
 
 interface CatalogEntry {
@@ -81,17 +105,29 @@ interface CatalogEntry {
   serverError?: string;
 }
 
-function catalog(machines: Machine[]): Map<string, CatalogEntry> {
+/**
+ * Tools by the name clients use. On the aggregate endpoint that is the
+ * namespaced wire name; on a server's own endpoint it is the tool's original
+ * name, untouched, and only that server's tools exist.
+ */
+function catalog(machines: Machine[], scope?: Scope): Map<string, CatalogEntry> {
   const out = new Map<string, CatalogEntry>();
   for (const machine of machines) {
+    if (scope && machine.meta.id !== scope.machine) continue;
     for (const server of machine.servers) {
+      if (scope && server.name !== scope.server) continue;
       for (const tool of server.tools) {
         const ref = { machine: machine.meta.id, server: server.name, tool: tool.name };
-        out.set(wireName(ref), { ref, tool, machine, serverStatus: server.status, serverError: server.error });
+        out.set(scope ? tool.name : wireName(ref), { ref, tool, machine, serverStatus: server.status, serverError: server.error });
       }
     }
   }
   return out;
+}
+
+/** The server row an endpoint points at, if the machine has announced it. */
+export function findServer(machines: Machine[], scope: Scope) {
+  return machines.find((m) => m.meta.id === scope.machine)?.servers.find((s) => s.name === scope.server);
 }
 
 /** Hides arguments the agent's rule forces or forbids, so the model does not try to set them. */
@@ -115,17 +151,27 @@ const HEALTH_DEF: McpTool = {
   annotations: { readOnlyHint: true },
 };
 
-export async function listTools(caller: Caller, deps: BridgeDeps): Promise<McpTool[]> {
+export async function listTools(caller: Caller, deps: BridgeDeps, scope?: Scope): Promise<McpTool[]> {
   const agent = await loadAgent(caller, deps);
   if ("denied" in agent) return [HEALTH_DEF];
   const now = deps.now();
   const tools: McpTool[] = [HEALTH_DEF];
-  for (const [name, entry] of catalog(await deps.listMachines())) {
+  for (const [name, entry] of catalog(await deps.listMachines(), scope)) {
     if (!entry.machine.meta.enabled) continue;
     if (!deps.listStaleTools && (!isConnected(entry.machine, now) || entry.serverStatus !== "up")) continue;
-    const decision = decide(agent.rules, entry.ref, entry.tool.access);
+    const decision = authorize(agent, entry.ref, entry.tool.access);
     if (!decision.allowed) continue;
     const readOnly = entry.tool.access === "read";
+    if (scope) {
+      // Straight through: the local server's own name, description and schema.
+      tools.push({
+        name,
+        description: entry.tool.description ?? "",
+        inputSchema: schemaForRule(entry.tool.inputSchema, decision.rule),
+        annotations: { readOnlyHint: readOnly },
+      });
+      continue;
+    }
     tools.push({
       name,
       title: canonicalId(entry.ref),
@@ -137,21 +183,22 @@ export async function listTools(caller: Caller, deps: BridgeDeps): Promise<McpTo
   return tools;
 }
 
-export async function health(caller: Caller, deps: BridgeDeps): Promise<McpToolResult> {
+export async function health(caller: Caller, deps: BridgeDeps, scope?: Scope): Promise<McpToolResult> {
   const agent = await loadAgent(caller, deps);
-  const rules = "denied" in agent ? [] : agent.rules;
+  const allowed = (ref: ToolRef, access: ToolInfo["access"]) => !("denied" in agent) && authorize(agent, ref, access).allowed;
   const now = deps.now();
-  const machines = (await deps.listMachines()).map((m) => ({
+  const machines = (await deps.listMachines()).filter((m) => !scope || m.meta.id === scope.machine).map((m) => ({
     machine: m.meta.id,
     connected: isConnected(m, now),
     enabled: m.meta.enabled,
     lastSeen: m.meta.lastSeenAt ? new Date(m.meta.lastSeenAt).toISOString() : null,
     agentVersion: m.meta.agentVersion ?? null,
-    servers: m.servers.map((s) => ({
+    servers: m.servers.filter((s) => !scope || s.name === scope.server).map((s) => ({
       server: s.name,
+      ...(s.title ? { title: s.title } : {}),
       status: isConnected(m, now) ? s.status : "unreachable",
       ...(s.error ? { error: s.error } : {}),
-      toolsAvailableToYou: s.tools.filter((t) => decide(rules, { machine: m.meta.id, server: s.name, tool: t.name }, t.access).allowed).length,
+      toolsAvailableToYou: s.tools.filter((t) => allowed({ machine: m.meta.id, server: s.name, tool: t.name }, t.access)).length,
     })),
   }));
   const body = {
@@ -174,14 +221,14 @@ const DISPATCH_OUTCOME: Record<Exclude<DispatchOutcome, { ok: true }>["failure"]
   bridge_error: "bridge_error",
 };
 
-export async function callTool(caller: Caller, name: string, rawArgs: Record<string, unknown>, deps: BridgeDeps): Promise<McpToolResult> {
-  if (name === HEALTH_TOOL) return health(caller, deps);
+export async function callTool(caller: Caller, name: string, rawArgs: Record<string, unknown>, deps: BridgeDeps, scope?: Scope): Promise<McpToolResult> {
+  if (name === HEALTH_TOOL) return health(caller, deps, scope);
 
   const started = deps.now();
   const callId = (deps.newCallId ?? randomUUID)();
   const argBytes = Buffer.byteLength(JSON.stringify(rawArgs), "utf8");
-  let toolLabel = name;
-  let machineId: string | undefined;
+  let toolLabel = scope ? `${scope.machine}.${scope.server}.${name}` : name;
+  let machineId: string | undefined = scope?.machine;
   let hash = "";
 
   const finish = async (outcome: Outcome, reason: string | undefined, result: McpToolResult, size = 0): Promise<McpToolResult> => {
@@ -225,7 +272,10 @@ export async function callTool(caller: Caller, name: string, rawArgs: Record<str
   }
 
   const machines = await deps.listMachines();
-  const entry = catalog(machines).get(name);
+  if (scope && !findServer(machines, scope)) {
+    return finish("denied", "unknown_endpoint", errorResult(`${scope.machine}/${scope.server} is not available. Call ${HEALTH_TOOL} for details.`));
+  }
+  const entry = catalog(machines, scope).get(name);
   // An unknown tool and a tool the agent may not use give the same answer, so
   // an agent cannot probe for what exists.
   const notPermitted = () => errorResult(`tool "${name}" is not available to agent "${caller.agent}"`);
@@ -233,7 +283,7 @@ export async function callTool(caller: Caller, name: string, rawArgs: Record<str
   toolLabel = canonicalId(entry.ref);
   machineId = entry.ref.machine;
 
-  const decision = decide(agent.rules, entry.ref, entry.tool.access);
+  const decision = authorize(agent, entry.ref, entry.tool.access);
   if (!decision.allowed) return finish("denied", decision.reason, notPermitted());
 
   if (argBytes > limits.maxArgBytes) {
