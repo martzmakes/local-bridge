@@ -1,0 +1,13 @@
+{
+  "machine": "mini",
+  "endpoint": "wss://bridge-ws.martzmakes.com",
+  "servers": {
+    "notes": {
+      "transport": "stdio",
+      "command": "/usr/local/bin/node",
+      "args": ["/Users/example/dev/apple-notes-mcp/dist/index.js"],
+      "read": ["list_folders", "list_notes", "get_note", "search_notes"],
+      "write": []
+    }
+  }
+}

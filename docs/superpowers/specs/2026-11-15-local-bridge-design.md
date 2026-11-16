@@ -191,7 +191,9 @@ Cloud to machine (one `PostToConnection` each, at most 128 KB):
 | `call` | `callId`, `server`, `tool`, `arguments`, `deadline` (epoch ms), `maxResultBytes` |
 | `cancel` | `callId` |
 
-The machine refuses a call whose deadline has passed (30 s clock-skew allowance), a call for a server or tool its config does not expose, and a call to a write tool its config has not enabled.
+The machine acks every call it receives, then refuses one whose deadline has passed (30 s clock-skew allowance) or whose server or tool its config does not expose. Acking a refusal keeps the cloud from reading it as "asleep".
+
+Key rotation is announced by the daemon, not the CLI: `rotate-key` stores a pending key, and the daemon sends `rotate` on its next `hello`, switches when the cloud answers `rotated`, and reconnects with the new key.
 
 ## 7. Tool namespacing
 
@@ -203,7 +205,7 @@ Machine and server names are `[a-z0-9]{1,16}` and are set in the machine's confi
 
 Each listed tool's description is prefixed with `[mini / notes]` and the access class, and carries `annotations.readOnlyHint`.
 
-**Read or write.** The machine config classifies every exposed tool. A tool is `write` unless the config lists it under `read`. Unknown is write, so a new tool that appears after a local server upgrade stays off.
+**Read or write.** The machine config classifies every exposed tool by listing it under `read` or `write` (a name in both is `write`). A tool listed under neither is not exposed at all, so a new tool that appears after a local server upgrade stays invisible until it is added.
 
 **Listing.** `tools/list` returns the tools the calling agent is allowed to call, from machines that are currently connected, plus `bridge_health`. The catalog is replaced whenever a machine sends `hello`, which it does on every reconnect. **(my call)**: an env switch `LIST_STALE_TOOLS=true` keeps a disconnected machine's last catalog in the list (calls then fail fast with the offline error). It is off, as the brief says "connected machines", but it may turn out friendlier for clients that cache `tools/list` at conversation start.
 
