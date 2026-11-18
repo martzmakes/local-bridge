@@ -592,7 +592,7 @@ function handler(event) {
         },
         "/updates/*": staticBehavior,
       },
-      defaultRootObject: "index.html",
+      defaultRootObject: "landing/index.html",
       domainNames: [DOMAIN],
       certificate,
       // NOTE: errorResponses removed deliberately (see SpaFallbackFunction

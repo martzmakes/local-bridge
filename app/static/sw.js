@@ -1,9 +1,9 @@
-const CACHE_NAME = "local-bridge-v1";
-const PRECACHE = ["/"];
+const CACHE_NAME = "local-bridge-v2";
+const ACCOUNT = "/account";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE))
+    caches.open(CACHE_NAME).then((cache) => cache.add(ACCOUNT))
   );
   self.skipWaiting();
 });
@@ -18,8 +18,8 @@ self.addEventListener("activate", (e) => {
 });
 
 self.addEventListener("fetch", (e) => {
-  if (e.request.mode === "navigate") {
-    e.respondWith(fetch(e.request).catch(() => caches.match("/")));
+  if (e.request.mode === "navigate" && new URL(e.request.url).pathname === ACCOUNT) {
+    e.respondWith(fetch(e.request).catch(() => caches.match(ACCOUNT)));
     return;
   }
   if (e.request.url.includes("execute-api") || e.request.url.includes("/api/")) {

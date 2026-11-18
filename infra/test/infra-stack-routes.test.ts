@@ -43,6 +43,20 @@ describe("LocalBridgeStack", () => {
     template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "GET /.well-known/oauth-protected-resource/{proxy+}" });
   });
 
+  it("serves the marketing page at the root and keeps the auth callback on the sign-in app", () => {
+    template.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: {
+        DefaultRootObject: "landing/index.html",
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: "/auth/complete",
+            FunctionAssociations: Match.arrayWith([Match.objectLike({ EventType: "viewer-request" })]),
+          }),
+        ]),
+      },
+    });
+  });
+
   it("serves software updates separately from the SPA and excludes them from site pruning", () => {
     template.hasResourceProperties("AWS::CloudFront::Distribution", {
       DistributionConfig: {

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#101425">
+  <meta name="description" content="Connect remote AI clients to the MCP tools running on your Mac. A native macOS app with a bridge built on AWS and an open-source release in preparation.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Local Bridge — Your Mac, within reach.">
+  <meta property="og:description" content="Bring your local MCP tools to remote AI clients with a native Mac app and an AWS bridge.">
+  <meta property="og:image" content="https://bridge.martzmakes.com/landing/controls.webp">
+  <meta property="og:url" content="https://bridge.martzmakes.com/">
+  <link rel="canonical" href="https://bridge.martzmakes.com/">
+  <link rel="icon" type="image/png" href="/landing/icon.png">
+  <link rel="stylesheet" href="/landing/site.css">
+  <title>Local Bridge — Your Mac, within reach.</title>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar" id="top">
+    <nav class="shell nav" aria-label="Main navigation">
+      <a class="brand" href="#top">
+        <img src="/landing/icon.png" width="30" height="30" alt="">
+        <span>Local Bridge</span>
+      </a>
+      <div class="nav-links">
+        <a href="#how">Built on AWS</a>
+        <a href="#source">Open source</a>
+        <a href="/account">Sign in</a>
+      </div>
+      <a class="button button-small" href="/updates/LocalBridge-Mac-0.3.0.zip">Download<span aria-hidden="true"> ↓</span></a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <div class="opening">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="shell hero-copy">
+          <p class="eyebrow">MCP for macOS</p>
+          <h1 id="hero-title">Your Mac,<br><span>within reach.</span></h1>
+          <p class="lede">Connect remote AI clients to the MCP tools on your Mac. Choose what each server shares from one native app.</p>
+          <div class="actions">
+            <a class="button" href="/updates/LocalBridge-Mac-0.3.0.zip">Download for Mac<span aria-hidden="true"> ↓</span></a>
+            <a class="text-link" href="#how">See the architecture <span aria-hidden="true">→</span></a>
+          </div>
+          <p class="requirements">Apple silicon · macOS 14 or later · Node.js 22+</p>
+        </div>
+
+        <figure class="shell hero-image">
+          <div class="window">
+            <img src="/landing/controls.webp" alt="Local Bridge on macOS, showing Notes with a per-server connector and switches for individual tools." fetchpriority="high">
+          </div>
+          <figcaption>Local Bridge for Mac, shown with sample data.</figcaption>
+        </figure>
+      </section>
+    </div>
+
+    <section class="overview" aria-labelledby="control-title">
+      <div class="shell">
+        <div class="section-heading">
+          <p class="eyebrow">A native Mac app</p>
+          <h2 id="control-title">Your tools.<br>Your call.</h2>
+          <p>Import the MCP servers you already use. Give each server its own connector URL and switch on just the tools you want available.</p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature feature-import">
+            <div class="feature-copy">
+              <h3>Bring your own servers.</h3>
+              <p>Import existing MCP configurations from apps like Claude Code and Codex, or add a server by hand.</p>
+            </div>
+            <figure class="feature-image">
+              <img src="/landing/import.webp" loading="lazy" alt="The Add Servers sheet lists local MCP servers available to import.">
+            </figure>
+          </article>
+          <article class="feature feature-activity">
+            <div class="feature-copy">
+              <h3>See what ran.</h3>
+              <p>Review tool names, outcomes, and timing in Activity. The audit trail leaves out tool arguments and results.</p>
+            </div>
+            <figure class="feature-image">
+              <img src="/landing/activity.webp" loading="lazy" alt="The Activity view shows sample tool calls with their times, durations, and outcomes.">
+            </figure>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="architecture" id="how" aria-labelledby="aws-title">
+      <div class="shell">
+        <div class="section-heading">
+          <p class="eyebrow">Built on AWS</p>
+          <h2 id="aws-title">Your Mac makes<br>the connection.</h2>
+          <p>The Mac opens a WebSocket to AWS. A remote client signs in over HTTPS, and AWS relays its MCP calls over that connection. There are no inbound ports to open on your Mac.</p>
+        </div>
+        <div class="flow">
+          <div class="flow-node">
+            <span class="flow-icon client-icon" aria-hidden="true">›_</span>
+            <h3>Remote MCP client</h3>
+            <p>HTTPS with OAuth</p>
+          </div>
+          <span class="flow-arrow" aria-hidden="true">→</span>
+          <div class="flow-node flow-aws">
+            <span class="flow-icon aws-icon" aria-hidden="true">AWS</span>
+            <h3>Serverless bridge</h3>
+            <p>API Gateway, Lambda, and DynamoDB</p>
+          </div>
+          <span class="flow-arrow reverse" aria-hidden="true">←</span>
+          <div class="flow-node">
+            <span class="flow-icon"><img src="/landing/icon.png" width="40" height="40" alt=""></span>
+            <h3>Local Bridge for Mac</h3>
+            <p>Outbound WebSocket</p>
+          </div>
+        </div>
+        <p class="flow-note">If the Mac goes offline, calls fail promptly. The bridge does not queue them for later.</p>
+      </div>
+    </section>
+
+    <section class="source" id="source" aria-labelledby="source-title">
+      <div class="shell source-content">
+        <div>
+          <p class="eyebrow">Open source</p>
+          <h2 id="source-title">Built to be shared.</h2>
+          <p>The SwiftUI app, Node daemon, and AWS CDK stack live together in one codebase. The open-source release is in preparation.</p>
+          <a class="button button-dark" href="https://github.com/martzmakes/local-bridge">Local Bridge on GitHub <span aria-hidden="true">↗</span></a>
+          <p class="source-note">The repository is private during release preparation.</p>
+        </div>
+        <aside class="preview-note" aria-labelledby="preview-title">
+          <img src="/landing/icon.png" width="52" height="52" alt="">
+          <h3 id="preview-title">Try the Mac preview.</h3>
+          <p>Download the notarized app. Hosted sign-in is invite-only during the preview.</p>
+          <a class="text-link" href="/updates/LocalBridge-Mac-0.3.0.zip">Download 0.3.0 <span aria-hidden="true">↓</span></a>
+        </aside>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <div class="shell footer-content">
+      <a class="brand" href="#top"><img src="/landing/icon.png" width="26" height="26" alt=""> Local Bridge</a>
+      <div class="footer-links">
+        <a href="https://github.com/martzmakes/local-bridge">GitHub</a>
+        <a href="/account">Sign in</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

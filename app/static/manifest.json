@@ -2,7 +2,7 @@
   "name": "Local Bridge",
   "short_name": "Local Bridge",
   "description": "Remote MCP server that bridges cloud agents to MCP servers on my Macs",
-  "start_url": "/",
+  "start_url": "/account",
   "display": "standalone",
   "background_color": "#07090C",
   "theme_color": "#07090C",

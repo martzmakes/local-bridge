@@ -23,7 +23,7 @@ Rotating `/local-bridge/jwt-secret` signs every agent out: connectors must sign 
 
 ## 2. Web bundle
 
-The stack uploads `app/dist`, so build it before the first deploy and whenever `app/` changes.
+The stack uploads `app/dist`, so build it before the first deploy and whenever `app/` changes. Expo copies the public landing page from `app/public/landing`. CloudFront serves it at `/` and sends `/account` and `/auth/complete` to the Expo sign-in app. Sparkle archives and the feed have their own deploy workflow under [Updates and releases](../macapp/README.md#updates-and-releases).
 
 ```bash
 cd app && npm ci && EXPO_PUBLIC_AUTH_API_URL="https://bridge.martzmakes.com" npx expo export --platform web --clear \
