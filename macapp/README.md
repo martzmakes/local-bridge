@@ -25,19 +25,20 @@ open "build/Local Bridge.app"
 server cannot be reached it signs with `--timestamp=none`; if the certificate is not in the
 keychain it signs ad hoc and says so. Neither fallback happens in release mode.
 
-### Release
+### Updates and releases
+
+Install the first Sparkle-enabled build in `/Applications`. Use **Check for Updates…** from the Local Bridge menu or menu bar item. **Settings → General → Software Updates** controls automatic checks. Updates are verified before extraction, and Sparkle also verifies the signed feed.
 
 ```sh
-./scripts/release.sh 0.2.0        # optional: --build <n>
+./scripts/release.sh 0.3.0         # build, notarize, staple, and prepare the signed feed
+./scripts/publish-update.sh 0.3.0  # publish the archive, then replace the live appcast
 ```
 
-Builds in release mode (secure timestamp required), notarizes with `notarytool submit --wait`,
-staples, checks with `stapler validate` and `spctl`, and leaves
-`build/release/<version>/Local Bridge.app` and `LocalBridge-Mac-<version>.zip`. Notary
-credentials: the App Store Connect API key at `~/.appstoreconnect/private_keys/AuthKey_<id>.p8`
-when present, otherwise the keychain profile `local-bridge-notary` (`LOCALBRIDGE_ASC_KEY_ID`,
-`LOCALBRIDGE_ASC_KEY_FILE`, `LOCALBRIDGE_ASC_ISSUER`, `LOCALBRIDGE_NOTARY_PROFILE` override).
-Nothing is uploaded anywhere else, and there is no update feed.
+Run these from `macapp` after rebuilding the daemon. Releases are stored under `build/release/<version>`. Each release needs a higher `CFBundleVersion`. The timestamp is the default and `--build <n>` overrides it. The live distribution uses immutable versioned ZIPs under `/updates/` and serves the appcast without caching it.
+
+The release script uses the App Store Connect API key if available and otherwise uses the `local-bridge-notary` Keychain profile. Override the notary settings with `LOCALBRIDGE_ASC_KEY_ID`, `LOCALBRIDGE_ASC_KEY_FILE`, `LOCALBRIDGE_ASC_ISSUER`, or `LOCALBRIDGE_NOTARY_PROFILE`. Set `LOCALBRIDGE_RELEASE_ROOT` for a different release directory.
+
+The Sparkle private key is in the login Keychain under account `local-bridge`. Self-hosted builds can set `LOCALBRIDGE_UPDATE_FEED_URL` and `LOCALBRIDGE_SPARKLE_PUBLIC_KEY` to their own HTTPS feed and public key. Use `LOCALBRIDGE_SPARKLE_KEY_ACCOUNT` to select that key when preparing and publishing an update.
 
 ### Snapshots
 
@@ -81,7 +82,7 @@ not part of the config file, and are not moved by these variables.
 | `Sources/LocalBridge/` | The SwiftUI app. `AppModel` holds all state; `Views/` are the sign-in screen, the server list and detail, the add sheet, Activity, Settings (General, Account, Permissions) and the menu bar item. |
 | `Tests/LocalBridgeCoreTests/` | XCTest. Process tests run small shell scripts in place of node; account tests use a fake HTTP transport and an in-memory token store. |
 | `Resources/` | `Info.plist`, entitlements (hardened runtime, Apple Events; not sandboxed), `AppIcon.icns` (drawn by `scripts/make-icon.swift`). |
-| `scripts/` | `build-app.sh`, `release.sh`, `make-icon.swift`. |
+| `scripts/` | `build-app.sh`, `release.sh`, `publish-update.sh`, `make-icon.swift`. |
 
 At run time:
 

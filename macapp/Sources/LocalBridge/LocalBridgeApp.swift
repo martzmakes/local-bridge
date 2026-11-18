@@ -29,6 +29,7 @@ struct LocalBridgeApp: App {
         }
         .defaultSize(width: 960, height: 720)
         .commands {
+            CommandGroup(after: .appInfo) { CheckForUpdatesButton() }
             CommandGroup(replacing: .newItem) {
                 Button("Add Server…") { model.showingAddServer = true }
                     .keyboardShortcut("n")
@@ -76,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, andSelector: #selector(handleURL(_:reply:)),
             forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
         AppModel.shared.bootstrap()
+        AppUpdater.shared.start()
     }
 
     @objc private func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {

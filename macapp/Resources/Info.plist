@@ -53,5 +53,15 @@
 	<string>A local MCP server you added to Local Bridge is asking to read and change your reminders so it can answer tool calls.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>A local MCP server you added to Local Bridge is asking to read your contacts so it can show names instead of phone numbers.</string>
+	<key>SUFeedURL</key>
+	<string>https://bridge.martzmakes.com/updates/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>uKCcKne4qXghDZUD8m81REa2FDQBKtQF/e1s9DiWFaQ=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SURequireSignedFeed</key>
+	<true/>
 </dict>
 </plist>

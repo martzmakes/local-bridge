@@ -54,6 +54,7 @@ struct MenuBarContent: View {
             Text("Settings…")
         }
         .keyboardShortcut(",")
+        CheckForUpdatesButton()
         Divider()
         Button("Quit Local Bridge") { NSApp.terminate(nil) }
             .keyboardShortcut("q")

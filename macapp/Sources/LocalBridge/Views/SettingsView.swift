@@ -28,6 +28,7 @@ struct GeneralSettings: View {
     }
 
     @Environment(AppModel.self) private var model
+    @ObservedObject private var updater = AppUpdater.shared
     @FocusState private var focus: Field?
     @State private var machine = ""
     @State private var nodePath = ""
@@ -44,7 +45,7 @@ struct GeneralSettings: View {
                     .onSubmit { commit(.machine) }
                     .disabled(readOnly)
             } footer: {
-                footer(.machine, "Part of every connector URL. Lowercase letters and digits, up to 16. Changing it changes every URL and restarts the bridge.")
+                footer(.machine, "Use up to 16 lowercase letters and digits. Changing the name restarts the bridge.")
             }
 
             Section {
@@ -81,6 +82,15 @@ struct GeneralSettings: View {
             } footer: {
                 footer(errors[.endpoint] != nil ? .endpoint : .publicBase,
                        "The connection is where this Mac dials out to. The public address is where agents reach it, and where you sign in. Changes apply when you press Return and restart the bridge.")
+            }
+
+            if updater.isConfigured {
+                Section("Software Updates") {
+                    Toggle("Automatically check for updates", isOn: Binding(
+                        get: { updater.automaticallyChecks },
+                        set: { updater.setAutomaticChecks($0) }))
+                    CheckForUpdatesButton()
+                }
             }
 
             Section {

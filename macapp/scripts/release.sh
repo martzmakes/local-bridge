@@ -6,7 +6,7 @@
 # Steps: build and sign with scripts/build-app.sh in release mode (Developer ID, hardened runtime,
 # secure timestamp; no fallback), notarize, staple, check with Gatekeeper, zip.
 #
-# Leaves build/release/<version>/Local Bridge.app and build/release/<version>/LocalBridge-Mac-<version>.zip.
+# Leaves the app, ZIP, and signed appcast in build/release/<version> (or LOCALBRIDGE_RELEASE_ROOT).
 # Nothing is uploaded anywhere except to Apple's notary service. There is no update feed yet.
 #
 # Needs: the Developer ID Application certificate for team EXAMPLETEAM in the login keychain, and
@@ -52,7 +52,9 @@ else
   NOTARY_LABEL="keychain profile $NOTARY_PROFILE"
 fi
 
-OUT="build/release/$VERSION"
+OUT="${LOCALBRIDGE_RELEASE_ROOT:-$MACAPP/build/release}/$VERSION"
+SPARKLE_ACCOUNT="${LOCALBRIDGE_SPARKLE_KEY_ACCOUNT:-local-bridge}"
+SPARKLE_BIN="$MACAPP/.build/artifacts/sparkle/Sparkle/bin"
 APP="$OUT/$PRODUCT.app"
 ZIP_NAME="LocalBridge-Mac-$VERSION.zip"
 ZIP="$OUT/$ZIP_NAME"
@@ -66,7 +68,7 @@ xcrun notarytool history "${NOTARY_AUTH[@]}" >/dev/null 2>&1 \
 
 # --- 1. build and sign --------------------------------------------------------------------------
 step "Build $PRODUCT $VERSION ($BUILD)"
-rm -rf "$OUT"
+[[ ! -e "$OUT" ]] || die "release directory already exists at $OUT"
 mkdir -p "$OUT"
 LOCALBRIDGE_RELEASE=1 LOCALBRIDGE_OUT="$OUT" LOCALBRIDGE_VERSION="$VERSION" LOCALBRIDGE_BUILD="$BUILD" \
   scripts/build-app.sh
@@ -79,6 +81,11 @@ SIGNING_INFO="$(codesign -dvv "$APP" 2>&1)"
 SHORT="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
 BUNDLE_BUILD="$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")"
 [[ "$SHORT" == "$VERSION" && "$BUNDLE_BUILD" == "$BUILD" ]] || die "the app reports $SHORT ($BUNDLE_BUILD), expected $VERSION ($BUILD)"
+FEED_URL="$(plutil -extract SUFeedURL raw "$APP/Contents/Info.plist")"
+[[ "$FEED_URL" == https://*/appcast.xml ]] || die "SUFeedURL must be an HTTPS appcast.xml URL"
+PUBLIC_KEY="$(plutil -extract SUPublicEDKey raw "$APP/Contents/Info.plist")"
+SIGNING_KEY="$("$SPARKLE_BIN/generate_keys" --account "$SPARKLE_ACCOUNT" -p)"
+[[ -n "$PUBLIC_KEY" && "$PUBLIC_KEY" == "$SIGNING_KEY" ]] || die "the app's Sparkle public key does not match Keychain account $SPARKLE_ACCOUNT"
 
 # --- 2. notarize and staple ---------------------------------------------------------------------
 step "Notarize with $NOTARY_LABEL"
@@ -100,6 +107,16 @@ ditto -c -k --keepParent "$APP" "$ZIP"
 [[ -s "$ZIP" ]] || die "zip is empty"
 ls -la "$ZIP"
 
-step "Released $PRODUCT $VERSION ($BUILD)"
-echo "app: $MACAPP/$APP"
-echo "zip: $MACAPP/$ZIP"
+# Generate a signed feed locally. Publication is a separate, explicit action.
+step "Sign update feed"
+APPCAST="$OUT/appcast.xml"
+"$SPARKLE_BIN/generate_appcast" --account "$SPARKLE_ACCOUNT" --maximum-deltas 0 \
+  --download-url-prefix "${FEED_URL%/appcast.xml}/" -o "$APPCAST" "$OUT"
+"$SPARKLE_BIN/sign_update" --account "$SPARKLE_ACCOUNT" --verify "$APPCAST"
+SIGNATURE="$(xmllint --xpath 'string(//enclosure/@*[local-name()="edSignature"])' "$APPCAST")"
+"$SPARKLE_BIN/sign_update" --account "$SPARKLE_ACCOUNT" --verify "$ZIP" "$SIGNATURE"
+
+step "Prepared $PRODUCT $VERSION ($BUILD)"
+echo "app: $APP"
+echo "zip: $ZIP"
+echo "feed: $APPCAST"

@@ -5,7 +5,7 @@
 // screen POSTs to /oauth/consent, which the template's route list omitted —
 // Claude then never received its OAuth callback ("Missing OAuth callback data").
 import * as cdk from "aws-cdk-lib/core";
-import { Template } from "aws-cdk-lib/assertions";
+import { Match, Template } from "aws-cdk-lib/assertions";
 import { LocalBridgeStack } from "../lib/infra-stack";
 
 const EXPECTED_OAUTH_ROUTES = [
@@ -41,6 +41,25 @@ describe("LocalBridgeStack", () => {
 
   it("serves per-endpoint protected-resource metadata", () => {
     template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "GET /.well-known/oauth-protected-resource/{proxy+}" });
+  });
+
+  it("serves software updates separately from the SPA and excludes them from site pruning", () => {
+    template.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: {
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: "/updates/appcast.xml",
+            CachePolicyId: "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+            FunctionAssociations: Match.absent(),
+          }),
+          Match.objectLike({
+            PathPattern: "/updates/*",
+            FunctionAssociations: Match.absent(),
+          }),
+        ]),
+      },
+    });
+    template.hasResourceProperties("Custom::CDKBucketDeployment", { Exclude: ["updates/*"] });
   });
 
   it("guards the machine channel's $connect with the device authorizer", () => {

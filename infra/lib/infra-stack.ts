@@ -557,11 +557,13 @@ function handler(event) {
 
     // The S3 SPA behavior, reused for both the default behavior and the exact
     // /auth/complete deep link below (one origin, referenced by both).
-    const spaBehavior = {
-      origin:
-        cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(siteBucket),
+    const staticBehavior = {
+      origin: cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(siteBucket),
       viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+    };
+    const spaBehavior = {
+      ...staticBehavior,
       functionAssociations: [
         {
           function: spaFallbackFunction,
@@ -584,6 +586,11 @@ function handler(event) {
         "/auth/*": apiBehavior,
         "/oauth/*": apiBehavior,
         "/.well-known/*": apiBehavior,
+        "/updates/appcast.xml": {
+          ...staticBehavior,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        },
+        "/updates/*": staticBehavior,
       },
       defaultRootObject: "index.html",
       domainNames: [DOMAIN],
@@ -622,6 +629,7 @@ function handler(event) {
     new s3deploy.BucketDeployment(this, "DeploySite", {
       sources: [s3deploy.Source.asset(path.join(__dirname, "../../app/dist"))],
       destinationBucket: siteBucket,
+      exclude: ["updates/*"],
       distribution,
       distributionPaths: ["/*"],
     });
@@ -655,6 +663,7 @@ function handler(event) {
       description: "CloudFront URL (redirects to apex domain)",
     });
     new cdk.CfnOutput(this, "SiteBucketName", { value: siteBucket.bucketName });
+    new cdk.CfnOutput(this, "UpdateFeedUrl", { value: `https://${DOMAIN}/updates/appcast.xml` });
     new cdk.CfnOutput(this, "UsersTableName", { value: usersTable.tableName });
     new cdk.CfnOutput(this, "MagicLinkTokensTableName", {
       value: magicLinkTokensTable.tableName,
