@@ -211,10 +211,6 @@ export class LocalBridgeStack extends cdk.Stack {
       methods: [apigwv2.HttpMethod.POST],
       integration: new apigwv2Integrations.HttpLambdaIntegration("WaitlistIntegration", requestMagicLinkHandler),
     });
-    const httpStage = authHttpApi.defaultStage?.node.defaultChild as apigwv2.CfnStage;
-    httpStage.routeSettings = {
-      "POST /api/waitlist": { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 8 },
-    };
     oauthTable.grantReadWriteData(verifyMagicLinkHandler); // for OAuth handoff
     jwtSecretParam.grantRead(verifyMagicLinkHandler);
     jwtSecretParam.grantRead(meHandler);
