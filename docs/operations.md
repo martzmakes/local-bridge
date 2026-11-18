@@ -62,7 +62,13 @@ npm run admin -- agent disable people
 
 `agent disable` is immediate for every token. `agent revoke-tokens <agent>` invalidates minted tokens only.
 
-Tool names in rules are the dotted form (`mini.notes.search_notes`). On `/mcp` agents see `mini__notes__search_notes`; on `/mcp/mini/notes` they see `search_notes`.
+Use dotted tool names such as `mini.notes.search_notes` in rules. The aggregate `/mcp` endpoint uses names such as `mini__notes__search_notes`. The Notes server’s `/mcp/<uuid>` endpoint uses the original `search_notes` name.
+
+### Upgrading from named connector URLs
+
+Prepare the updated Mac app before deploying the cloud stack. The stack replaces `/mcp/<machine>/<server>` with `/mcp/<uuid>`. Launch the updated app after deployment to assign UUIDs to saved servers and announce them when the daemon connects. Once the Mac is connected, replace any old connector URLs with the ones shown in the app. The aggregate `/mcp` endpoint remains available with its existing authentication and tool policy.
+
+A command-line daemon can announce a per-server endpoint when its server config has an `endpointId`. Generate a separate value for each server with `node -p 'require("node:crypto").randomUUID()'` and keep it in the config across restarts. Older daemon configs can still use the aggregate endpoint.
 
 ## Tokens
 

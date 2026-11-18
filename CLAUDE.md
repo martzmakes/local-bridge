@@ -50,7 +50,7 @@ cd infra && AWS_PROFILE=your-profile npm run mint -- <agent>
 
 - TypeScript strict, Zod at every boundary (HTTP body, WebSocket frame, DynamoDB rule rows, agent config).
 - Pure logic (`names`, `policy`, `audit`, `ratelimit`, `dispatch`, `device-auth`, `mcp/bridge`) takes its I/O as injected deps and is tested without AWS. Keep it that way.
-- Canonical tool ids are dotted (`mini.notes.search_notes`) in rules, audit and health. On the aggregate `/mcp`, wire names use `__` because Anthropic and OpenAI reject dots in tool names. On a server's own endpoint (`/mcp/<machine>/<server>`) names pass through untouched. Never parse a client-facing name; look it up in the catalog.
+- Canonical tool ids are dotted (`mini.notes.search_notes`) in rules, audit and health. On the aggregate `/mcp`, wire names use `__` because Anthropic and OpenAI reject dots in tool names. On a server's own endpoint (`/mcp/<uuid>`) names pass through untouched. Never parse a client-facing name; look it up in the catalog.
 - Auth is shared across endpoints: any valid bridge token is accepted on any endpoint, and what it may do there is policy (`authorize()` in `mcp/bridge.ts`).
 - JWTs: HS256, SSM `/local-bridge/jwt-secret`. Bridge tokens carry `agent` and `kind`; minted ones also `tv`. A JWT without `agent` (the web session) is not accepted by `/mcp`.
 - The MCP Lambda is the template's stateless JSON-RPC handler, with `@modelcontextprotocol/sdk` schemas for validation. The SDK server transport is not used in Lambda; the agent uses the SDK client.

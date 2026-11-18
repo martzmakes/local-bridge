@@ -24,6 +24,7 @@ import {
   QueryCommand,
   UpdateCommand,
   type DynamoDBDocumentClient,
+  type QueryCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import type { ServerInfo, ToolInfo } from "../../shared/protocol";
 import { RuleSchema, type Rule } from "./policy";
@@ -78,6 +79,7 @@ export interface MachineMeta {
 export interface MachineServer {
   machine: string;
   name: string;
+  endpointId?: string;
   title?: string;
   status: "up" | "down";
   error?: string;
@@ -192,16 +194,22 @@ export class Store {
   // ---- machines -----------------------------------------------------------
 
   async listMachines(): Promise<Machine[]> {
-    const res = await this.ddb.send(
-      new QueryCommand({
-        TableName: this.table,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": this.machinesPk },
-        ConsistentRead: true,
-      })
-    );
+    const items = [];
+    let startKey: QueryCommandInput["ExclusiveStartKey"];
+    do {
+      const res = await this.ddb.send(
+        new QueryCommand({
+          TableName: this.table,
+          KeyConditionExpression: "pk = :pk",
+          ExpressionAttributeValues: { ":pk": this.machinesPk },
+          ConsistentRead: true,
+          ExclusiveStartKey: startKey,
+        })
+      );
+      items.push(...(res.Items ?? []));
+      startKey = res.LastEvaluatedKey;
+    } while (startKey);
     const byId = new Map<string, Machine>();
-    const items = res.Items ?? [];
     for (const item of items) {
       if (String(item.sk).endsWith("#META")) {
         const meta = item.meta as MachineMeta;
@@ -325,7 +333,10 @@ export class Store {
       }
     }
     for (const s of servers) {
-      const server: MachineServer = { machine, name: s.name, title: s.title, status: s.status, error: s.error, tools: s.tools, updatedAt: now };
+      const server: MachineServer = {
+        machine, name: s.name, endpointId: s.endpointId, title: s.title,
+        status: s.status, error: s.error, tools: s.tools, updatedAt: now,
+      };
       await this.ddb.send(
         new PutCommand({ TableName: this.table, Item: { pk: this.machinesPk, sk: `${machine}#SERVER#${s.name}`, server } })
       );

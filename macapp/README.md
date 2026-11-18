@@ -1,7 +1,7 @@
 # Local Bridge for Mac
 
 The macOS app for Local Bridge. You sign in, add the MCP servers that run on this Mac, and each
-one gets its own address (`https://bridge.martzmakes.com/mcp/<machine>/<server>`). The app runs
+one gets its own address (`https://bridge.martzmakes.com/mcp/<uuid>`). The app runs
 the Node agent from `../agent` as its own child process, so macOS attaches Automation, Reminders
 and Full Disk Access to the signed app instead of to `node`.
 

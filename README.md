@@ -30,7 +30,7 @@ The Mac dials out to AWS over one WebSocket. No inbound ports, no VPN. A tool is
 
 Each local server has its own endpoint. The app shows the URL with a copy button.
 
-- `https://bridge.martzmakes.com/mcp/<machine>/<server>`, for example `/mcp/mini/notes`: that server's tools under their own names.
+- `https://bridge.martzmakes.com/mcp/<uuid>` presents one server’s tools under their own names. The app saves a random UUID for each server. The bridge resolves it within the signed-in account.
 - `https://bridge.martzmakes.com/mcp`: every server in one connector, with names like `mini__notes__search_notes`.
 
 Add a URL as a custom connector and sign in with the magic link. The sign-in is shared: after the first one, each further connector is one consent click. A connector sign-in is the owner and sees everything the app exposes on that endpoint.

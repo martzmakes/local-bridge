@@ -81,7 +81,7 @@ public struct ConfigStore: Sendable {
     /// Validates, then writes the file atomically with mode 0600. Returns what was written.
     @discardableResult
     public func save(_ config: BridgeConfig) throws -> BridgeConfig {
-        let normalized = config.normalized()
+        let normalized = config.normalized().withEndpointIDs()
         let issues = ConfigValidator.validate(normalized)
         guard issues.isEmpty else { throw ConfigError.invalid(issues) }
         try AtomicFile.write(Data(normalized.serialized().utf8), to: url, mode: 0o600)

@@ -191,13 +191,8 @@ struct AddServerSheet: View {
                         Text(problem)
                             .formFooter(.red)
                     } else {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("The name is the last part of the connector URL:")
-                            Text(model.draft.endpointURL(forServer: trimmedName.isEmpty ? "name" : trimmedName))
-                                .font(.footnote.monospaced())
-                                .textSelection(.enabled)
-                        }
-                        .formFooter()
+                        Text("A connector URL is assigned when you save.")
+                            .formFooter()
                     }
                 }
                 Section("Server") {

@@ -41,6 +41,7 @@ public enum Transport: String, Sendable, Equatable, CaseIterable, Codable {
 /// One entry under `servers` in the daemon's config.
 public struct ServerConfig: Sendable, Equatable {
     public var title: String?
+    public var endpointId: UUID?
     /// nil means the key is absent, which the daemon reads as enabled.
     public var enabled: Bool?
     public var transport: Transport
@@ -62,6 +63,7 @@ public struct ServerConfig: Sendable, Equatable {
 
     public init(
         title: String? = nil,
+        endpointId: UUID? = nil,
         enabled: Bool? = nil,
         transport: Transport = .stdio,
         command: String = "",
@@ -77,6 +79,7 @@ public struct ServerConfig: Sendable, Equatable {
         extra: [String: JSONValue] = [:]
     ) {
         self.title = title
+        self.endpointId = endpointId
         self.enabled = enabled
         self.transport = transport
         self.command = command
@@ -193,8 +196,19 @@ public struct BridgeConfig: Sendable, Equatable {
         return trimmed.isEmpty ? BridgeConfig.defaultPublicBase : trimmed
     }
 
-    public func endpointURL(forServer name: String) -> String {
-        EndpointURL.build(publicBase: effectivePublicBase, machine: machine, server: name)
+    public func endpointURL(forServer name: String) -> String? {
+        guard let id = servers[name]?.endpointId else { return nil }
+        var base = effectivePublicBase
+        while base.hasSuffix("/") { base.removeLast() }
+        return "\(base)/mcp/\(id.uuidString.lowercased())"
+    }
+
+    public func withEndpointIDs() -> BridgeConfig {
+        var copy = self
+        for name in servers.keys where servers[name]?.endpointId == nil {
+            copy.servers[name]?.endpointId = UUID()
+        }
+        return copy
     }
 
     public func normalized() -> BridgeConfig {
@@ -264,6 +278,13 @@ extension ServerConfig {
         }
         self.init(transport: transport)
         title = try r.string("title")
+        if let id = try r.string("endpointId") {
+            let pattern = #"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"#
+            guard id.range(of: pattern, options: .regularExpression) != nil, let uuid = UUID(uuidString: id) else {
+                throw ConfigError.structure("\(path.isEmpty ? "endpointId" : path + ".endpointId") must be a lowercase UUIDv4")
+            }
+            endpointId = uuid
+        }
         enabled = try r.bool("enabled")
         if transport == .stdio {
             command = try r.string("command") ?? ""
@@ -284,6 +305,7 @@ extension ServerConfig {
     public var json: JSONValue {
         var o = extra
         if let title { o["title"] = .string(title) }
+        if let endpointId { o["endpointId"] = .string(endpointId.uuidString.lowercased()) }
         if let enabled { o["enabled"] = .bool(enabled) }
         o["transport"] = .string(transport.rawValue)
         if transport == .stdio {
@@ -372,14 +394,5 @@ extension BridgeConfig: Codable {
 
     public func encode(to encoder: Encoder) throws {
         try json.encode(to: encoder)
-    }
-}
-
-public enum EndpointURL {
-    /// `<publicBase>/mcp/<machine>/<server>`, tolerant of a trailing slash on the base.
-    public static func build(publicBase: String, machine: String, server: String) -> String {
-        var base = publicBase.trimmingCharacters(in: .whitespaces)
-        while base.hasSuffix("/") { base.removeLast() }
-        return "\(base)/mcp/\(machine)/\(server)"
     }
 }

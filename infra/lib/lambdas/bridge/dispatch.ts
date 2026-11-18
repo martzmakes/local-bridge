@@ -39,6 +39,7 @@ export interface DispatchRequest {
   agent: string;
   machine: string;
   server: string;
+  endpointId?: string;
   tool: string;
   args: Record<string, unknown>;
   timeoutMs: number;
@@ -100,6 +101,7 @@ export async function dispatchCall(req: DispatchRequest, deps: DispatchDeps): Pr
       type: "call",
       callId: req.callId,
       server: req.server,
+      ...(req.endpointId ? { endpointId: req.endpointId } : {}),
       tool: req.tool,
       arguments: req.args,
       deadline,

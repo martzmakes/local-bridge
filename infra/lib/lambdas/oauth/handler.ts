@@ -36,6 +36,7 @@ import {
   consumeRefreshToken,
   deleteRefreshToken,
 } from "./refresh-tokens";
+import { mcpPath } from "../../shared/mcp-path";
 import { mintJwt, verifyJwt } from "../auth/lib/jwt";
 import { sendMagicLinkEmail } from "../auth/lib/email";
 import QRCode from "qrcode";
@@ -269,15 +270,13 @@ async function deleteAuthRequest(authCode: string) {
 // Resources (Local Bridge)
 //
 // Every MCP endpoint is its own protected resource: /mcp (all servers) and
-// /mcp/<machine>/<server> (one local server). They share this authorization
+// /mcp/<endpointId> (one local server). They share this authorization
 // server and its tokens: a grant made for one endpoint works on all of them.
 // Every connector sign-in is the built-in agent "owner"; which tools exist on
 // an endpoint is decided on the Mac, in the app.
 // ---------------------------------------------------------------------------
 
 export const OWNER_AGENT = "owner";
-const NAME = "[a-z0-9]{1,16}";
-const RESOURCE_PATH_RE = new RegExp(`^/mcp(/${NAME}/${NAME})?$`);
 
 /** The path of a resource URL if it is one of this server's MCP endpoints, else null. */
 export function resourcePath(resource: string | undefined, baseUrl: string): string | null {
@@ -285,8 +284,7 @@ export function resourcePath(resource: string | undefined, baseUrl: string): str
   const r = resource.replace(/\/+$/, "");
   if (r === baseUrl) return "/mcp";
   if (!r.startsWith(`${baseUrl}/`)) return null;
-  const path = r.slice(baseUrl.length);
-  return RESOURCE_PATH_RE.test(path) ? path : null;
+  return mcpPath(r.slice(baseUrl.length))?.path ?? null;
 }
 
 /** Client-requested scope with any agent: entries removed; a client never picks its agent. */

@@ -41,6 +41,7 @@ export interface ServerManagerOptions {
 }
 
 export interface CallOptions {
+  endpointId?: string;
   callId: string;
   /** Epoch milliseconds. */
   deadline: number;
@@ -196,6 +197,7 @@ export class ServerManager implements ToolRunner {
   list(): ServerInfo[] {
     return [...this.states.values()].map((s) => ({
       name: s.name,
+      ...(s.config.endpointId ? { endpointId: s.config.endpointId } : {}),
       ...(s.config.title ? { title: s.config.title } : {}),
       status: s.status,
       ...(s.error && s.status === "down" ? { error: s.error } : {}),
@@ -387,7 +389,9 @@ export class ServerManager implements ToolRunner {
 
     const state = this.states.get(server);
     const access = state && accessFor(state.config, tool);
-    if (!state || !access) return fail("not_exposed", "this server or tool is not exposed by the machine's config");
+    if (!state || !access || (opts.endpointId && opts.endpointId !== state.config.endpointId)) {
+      return fail("not_exposed", "this server or tool is not exposed by the machine's config");
+    }
     if (state.status !== "up" || !state.client) {
       return fail("server_down", `local server "${server}" is down${state.error ? `: ${state.error}` : ""}`.slice(0, 1000));
     }

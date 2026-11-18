@@ -1,18 +1,21 @@
 import { cleanScope, resourcePath } from "../../lib/lambdas/oauth/handler";
-import { scopeFromPath } from "../../lib/lambdas/mcp/server";
+import { mcpPath } from "../../lib/shared/mcp-path";
 
 const BASE = "https://bridge.martzmakes.com";
+const ID = "11d74ff2-cb50-408d-9083-382129fce4c0";
+const SERVER = `/mcp/${ID}`;
 
 describe("OAuth resources", () => {
   it("accepts the aggregate endpoint and any per-server endpoint as a resource", () => {
     expect(resourcePath(undefined, BASE)).toBe("/mcp");
     expect(resourcePath(`${BASE}/mcp`, BASE)).toBe("/mcp");
     expect(resourcePath(`${BASE}/mcp/`, BASE)).toBe("/mcp");
-    expect(resourcePath(`${BASE}/mcp/mini/notes`, BASE)).toBe("/mcp/mini/notes");
+    expect(resourcePath(`${BASE}${SERVER}`, BASE)).toBe(SERVER);
   });
 
   it("refuses resources that are not this server's MCP endpoints", () => {
-    expect(resourcePath("https://evil.example/mcp/mini/notes", BASE)).toBeNull();
+    expect(resourcePath(`https://elsewhere.example${SERVER}`, BASE)).toBeNull();
+    expect(resourcePath(`${BASE}/mcp/mini/notes`, BASE)).toBeNull();
     expect(resourcePath(`${BASE}.evil.example/mcp`, BASE)).toBeNull();
     expect(resourcePath(`${BASE}/mcp/mini`, BASE)).toBeNull();
     expect(resourcePath(`${BASE}/mcp/mini/notes/extra`, BASE)).toBeNull();
@@ -28,16 +31,17 @@ describe("OAuth resources", () => {
 });
 
 describe("request paths", () => {
-  it("maps /mcp to the aggregate endpoint and /mcp/<machine>/<server> to one server", () => {
-    expect(scopeFromPath("/mcp")).toEqual({});
-    expect(scopeFromPath("/mcp/")).toEqual({});
-    expect(scopeFromPath("/mcp/mini/notes")).toEqual({ scope: { machine: "mini", server: "notes" } });
+  it("parses the aggregate and UUID resources", () => {
+    expect(mcpPath("/mcp")).toEqual({ path: "/mcp" });
+    expect(mcpPath("/mcp/")).toEqual({ path: "/mcp" });
+    expect(mcpPath(`${SERVER}/`)).toEqual({ path: SERVER, endpointId: ID });
   });
 
-  it("rejects anything else, including the retired per-agent paths", () => {
-    expect(scopeFromPath("/mcp/mini")).toBeNull();
-    expect(scopeFromPath("/mcp/mini/notes/x")).toBeNull();
-    expect(scopeFromPath("/mcp/mini/No_tes")).toBeNull();
-    expect(scopeFromPath("/mcpx")).toBeNull();
+  it("rejects named paths, invalid UUIDs and extra path segments", () => {
+    expect(mcpPath("/mcp/mini/notes")).toBeNull();
+    expect(mcpPath("/mcp/mini")).toBeNull();
+    expect(mcpPath("/mcp/00000000-0000-0000-0000-000000000000")).toBeNull();
+    expect(mcpPath(`${SERVER}/extra`)).toBeNull();
+    expect(mcpPath("/mcpx")).toBeNull();
   });
 });

@@ -2,6 +2,8 @@
 
 Date: 2026-11-15. Extends `2026-11-15-local-bridge-design.md`; where the two differ, this one wins. Matt asked for the app and the per-server endpoints and chose the access model ("the app is the control"). The rest is marked **(my call)**.
 
+> Connector URLs changed after this design was written. See [Upgrading from named connector URLs](../../operations.md#upgrading-from-named-connector-urls) for the current route and rollout.
+
 ## 1. Intent
 
 Managing the bridge by editing a JSON file and running a CLI is the wrong shape. Matt wants a macOS app where he adds and manages local MCP servers, and each one becomes its own remote MCP server with its own URL and its own tools, exactly as the local server defines them. A straight-through proxy. One sign-in works for all of them.

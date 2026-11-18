@@ -2,10 +2,14 @@
 // read, list, call or audit anything in the other, including when both use
 // the same machine and agent names. Runs against an in-memory DynamoDB fake
 // that implements the operations and condition shapes the Store uses.
+import type { APIGatewayProxyEventV2, Context } from "aws-lambda";
 import { mockClient } from "aws-sdk-client-mock";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand, DeleteCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { Store } from "../../lib/lambdas/bridge/store";
 import { handleAccount, kidFor } from "../../lib/lambdas/account/handler";
+import * as jwt from "../../lib/lambdas/auth/lib/jwt";
+import * as runtime from "../../lib/lambdas/bridge/runtime";
+import { handler as mcpHandler } from "../../lib/lambdas/mcp/server";
 import { uidFromEmail } from "../../lib/lambdas/bridge/tenant";
 
 type Item = Record<string, any>;
@@ -71,6 +75,8 @@ function fakeTable() {
 
 const ALICE = uidFromEmail("alice@example.com");
 const BOB = uidFromEmail("Bob@Example.com");
+const ALICE_ENDPOINT = "c814d261-3092-4e28-8dab-34367099885c";
+const BOB_ENDPOINT = "bd86b4d4-d7ee-4801-874c-a8eb3379306b";
 const JWK = (c: string) => ({ kty: "OKP" as const, crv: "Ed25519" as const, x: c.repeat(43) });
 
 describe("accounts are isolated", () => {
@@ -88,7 +94,7 @@ describe("accounts are isolated", () => {
       await s.putMachineRegistration("mini", true, [{ kid: `kid-${c}`, jwk: JWK(c), addedAt: 1 }]);
       await s.bindConnection("mini", `conn-${c}`, `kid-${c}`);
       await s.replaceServers("mini", `conn-${c}`, "0.2.0", [
-        { name: "notes", title: `${c} notes`, status: "up", tools: [{ name: `tool_of_${c}`, inputSchema: {}, access: "read" }] },
+        { name: "notes", endpointId: c === "A" ? ALICE_ENDPOINT : BOB_ENDPOINT, title: `${c} notes`, status: "up", tools: [{ name: `tool_of_${c}`, inputSchema: {}, access: "read" }] },
       ]);
       await s.putAgent({ id: "coach", enabled: true, tokenVersion: 1, ratePerMinute: 1, ratePerDay: 10, maxArgBytes: 1, maxResultBytes: 1, callTimeoutMs: 1, createdAt: 0 });
       await s.putRule("coach", { tool: `mini.notes.tool_of_${c}`, access: "read" });
@@ -110,6 +116,43 @@ describe("accounts are isolated", () => {
     expect(a[0].meta.connectionId).toBe("conn-A");
     expect(b[0].servers[0].tools.map((x) => x.name)).toEqual(["tool_of_B"]);
     expect((await alice.getMachine("mini"))?.keys[0].kid).toBe("kid-A");
+  });
+
+  it("resolves UUIDs after authentication and only in the caller's account", async () => {
+    const store = jest.spyOn(runtime, "getStore").mockReturnValue(root);
+    const verify = jest.spyOn(jwt, "verifyJwt").mockImplementation(async (email) => ({ email, agent: "owner", kind: "oauth" }));
+    const request = (endpoint: string, email?: string) => mcpHandler({
+      rawPath: `/mcp/${endpoint}`,
+      requestContext: { http: { method: "POST" } },
+      headers: email ? { authorization: `Bearer ${email}` } : {},
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    } as APIGatewayProxyEventV2, {} as Context, () => {});
+
+    try {
+      const unauthorized = await request(ALICE_ENDPOINT);
+      expect(unauthorized).toMatchObject({
+        statusCode: 401,
+        headers: { "www-authenticate": expect.stringContaining(`/.well-known/oauth-protected-resource/mcp/${ALICE_ENDPOINT}`) },
+      });
+      expect(await request("6d947d1e-8998-47d1-a3b3-854d93c2042a")).toMatchObject({ statusCode: 401 });
+      expect(store).not.toHaveBeenCalled();
+
+      const own = await request(ALICE_ENDPOINT, "alice@example.com");
+      expect(own).toMatchObject({ statusCode: 200, body: expect.stringContaining('"name":"tool_of_A"') });
+      expect(own).not.toMatchObject({ body: expect.stringContaining("tool_of_B") });
+      expect(await request(ALICE_ENDPOINT, "bob@example.com")).toMatchObject({ statusCode: 404 });
+      expect(await request("mini/notes", "alice@example.com")).toMatchObject({ statusCode: 404 });
+
+      // A copied config with the same UUID must not point silently to a different server.
+      await alice.replaceServers("mini", "conn-A", "0.2.0", [
+        { name: "notes", endpointId: ALICE_ENDPOINT, status: "up", tools: [] },
+        { name: "copy", endpointId: ALICE_ENDPOINT, status: "up", tools: [] },
+      ]);
+      expect(await request(ALICE_ENDPOINT, "alice@example.com")).toMatchObject({ statusCode: 404 });
+    } finally {
+      verify.mockRestore();
+      store.mockRestore();
+    }
   });
 
   it("gives each account only its own agents and rules", async () => {

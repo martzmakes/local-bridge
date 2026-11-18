@@ -265,10 +265,21 @@ final class AppModel {
     func reloadConfig() {
         guard !isPreview else { return }
         loadState = store.load()
+        saveError = nil
         switch loadState {
         case .loaded(let config):
-            saved = config
-            draft = config
+            var loaded = config
+            let migrated = config.withEndpointIDs()
+            if migrated != config {
+                do {
+                    loaded = try store.save(migrated)
+                    loadState = .loaded(loaded)
+                } catch {
+                    saveError = describe(error)
+                }
+            }
+            saved = loaded
+            draft = loaded
         case .missing:
             saved = nil
             draft = BridgeConfig(machine: defaultMachineName())
@@ -276,7 +287,6 @@ final class AppModel {
             saved = nil
             draft = BridgeConfig(machine: "")
         }
-        saveError = nil
         draftGeneration += 1
         if case .server(let name)? = selection, draft.servers[name] == nil { selection = nil }
         if selection == nil, let first = draft.serverNamesByTitle.first { selection = .server(first) }
@@ -407,8 +417,8 @@ final class AppModel {
 
     /// Copies the connector URL and opens that product's connector settings.
     func openConnector(_ app: ConnectorApp, server name: String) {
-        guard !isPreview else { return }
-        copyToPasteboard(endpointURL(for: name))
+        guard !isPreview, let url = endpointURL(for: name) else { return }
+        copyToPasteboard(url)
         NSWorkspace.shared.open(app.settingsURL)
     }
 
@@ -431,8 +441,8 @@ final class AppModel {
         selection = draft.serverNamesByTitle.first.map(SidebarItem.server)
     }
 
-    func endpointURL(for name: String) -> String {
-        draft.endpointURL(forServer: name)
+    func endpointURL(for name: String) -> String? {
+        saved?.endpointURL(forServer: name)
     }
 
     // MARK: - Server and tool state

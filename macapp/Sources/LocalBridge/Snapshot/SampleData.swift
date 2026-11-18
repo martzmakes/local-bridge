@@ -10,7 +10,7 @@ enum SampleData {
         ServerConfig(transport: .stdio, command: "/usr/local/bin/node", args: ["/Users/example/dev/\(project)/dist/index.js"])
     }
 
-    static var config: BridgeConfig {
+    static let config: BridgeConfig = {
         var notes = node("apple-notes-mcp")
         notes.title = "Apple Notes"
         notes.read = ["list_folders", "list_notes", "get_note", "search_notes"]
@@ -36,8 +36,8 @@ enum SampleData {
 
         return BridgeConfig(
             machine: "mini", endpoint: BridgeConfig.defaultEndpoint, publicBase: "https://bridge.martzmakes.com", account: uid,
-            servers: ["notes": notes, "messages": messages, "reminders": reminders, "ha": ha, "calendar": calendar])
-    }
+            servers: ["notes": notes, "messages": messages, "reminders": reminders, "ha": ha, "calendar": calendar]).withEndpointIDs()
+    }()
 
     static var emptyConfig: BridgeConfig {
         BridgeConfig(machine: "mini", publicBase: "https://bridge.martzmakes.com", account: uid)

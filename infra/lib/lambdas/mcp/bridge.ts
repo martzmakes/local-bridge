@@ -26,10 +26,11 @@ export const HEALTH_TOOL = "bridge_health";
  */
 export const OWNER_AGENT = "owner";
 
-/** One local server's endpoint: /mcp/<machine>/<server>. Absent on the aggregate /mcp. */
+/** The tenant-local names resolved from a UUID. Absent on the aggregate /mcp. */
 export interface Scope {
   machine: string;
   server: string;
+  endpointId?: string;
 }
 
 export interface Caller {
@@ -123,6 +124,19 @@ function catalog(machines: Machine[], scope?: Scope): Map<string, CatalogEntry> 
     }
   }
   return out;
+}
+
+export function resolveEndpoint(machines: Machine[], endpointId: string): Scope | undefined {
+  let match: Scope | undefined;
+  for (const machine of machines) {
+    for (const server of machine.servers) {
+      if (server.endpointId !== endpointId) continue;
+      // Duplicated configs must never make a URL silently target the wrong Mac.
+      if (match) return undefined;
+      match = { machine: machine.meta.id, server: server.name, endpointId };
+    }
+  }
+  return match;
 }
 
 /** The server row an endpoint points at, if the machine has announced it. */
@@ -309,6 +323,7 @@ export async function callTool(caller: Caller, name: string, rawArgs: Record<str
       agent: caller.agent,
       machine: entry.ref.machine,
       server: entry.ref.server,
+      endpointId: scope?.endpointId,
       tool: entry.ref.tool,
       args,
       timeoutMs: Math.min(limits.callTimeoutMs, HARD_MAX_CALL_TIMEOUT_MS),

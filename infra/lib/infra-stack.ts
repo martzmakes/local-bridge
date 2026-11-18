@@ -419,10 +419,10 @@ export class LocalBridgeStack extends cdk.Stack {
       ),
     });
 
-    // One MCP endpoint per local server: /mcp/<machine>/<server>. Same auth
+    // One MCP endpoint per local server: /mcp/<endpointId>. Same auth
     // as /mcp; the endpoint exposes that server's tools under their own names.
     authHttpApi.addRoutes({
-      path: "/mcp/{machine}/{server}",
+      path: "/mcp/{endpointId}",
       methods: [
         apigwv2.HttpMethod.POST,
         apigwv2.HttpMethod.GET,

@@ -13,12 +13,13 @@ import {
   LATEST_PROTOCOL_VERSION,
   SUPPORTED_PROTOCOL_VERSIONS,
 } from "@modelcontextprotocol/sdk/types.js";
+import { mcpPath } from "../../shared/mcp-path";
 import { verifyJwt } from "../auth/lib/jwt";
 import { GoneError } from "../bridge/dispatch";
-import { isValidAgentId, isValidName } from "../bridge/names";
+import { isValidAgentId } from "../bridge/names";
 import { ConnectionGone, errName, getSecret, getStore, logEvent, pushToConnection } from "../bridge/runtime";
 import { uidFromEmail } from "../bridge/tenant";
-import { callTool, findServer, listTools, type BridgeDeps, type Caller, type Scope } from "./bridge";
+import { callTool, findServer, listTools, resolveEndpoint, type BridgeDeps, type Caller, type Scope } from "./bridge";
 
 const PROJECT_SLUG = process.env.PROJECT_SLUG!;
 const DOMAIN = process.env.DOMAIN!;
@@ -157,18 +158,6 @@ export async function dispatch(caller: Caller, raw: unknown, d: BridgeDeps, scop
 // Auth
 // ---------------------------------------------------------------------------
 
-/**
- * What a request path addresses: /mcp is the aggregate endpoint (no scope),
- * /mcp/<machine>/<server> is one local server. null if the path is neither.
- */
-export function scopeFromPath(rawPath: string): { scope?: Scope } | null {
-  const path = rawPath.replace(/\/+$/, "");
-  if (path === "/mcp") return {};
-  const m = /^\/mcp\/([^/]+)\/([^/]+)$/.exec(path);
-  if (!m || !isValidName(m[1]) || !isValidName(m[2])) return null;
-  return { scope: { machine: m[1], server: m[2] } };
-}
-
 /** Auth is shared: any valid bridge token works on every endpoint. What it may do there is policy. */
 export async function authenticate(authHeader: string | undefined): Promise<(Caller & { uid: string }) | null> {
   const match = /^Bearer\s+(.+)$/i.exec(authHeader ?? "");
@@ -184,10 +173,9 @@ export async function authenticate(authHeader: string | undefined): Promise<(Cal
   return { agent: claims.agent, tokenKind: claims.kind, tv: claims.tv, uid: uidFromEmail(claims.email) };
 }
 
-function unauthorized(scope?: Scope) {
-  const suffix = scope ? `/mcp/${scope.machine}/${scope.server}` : "/mcp";
+function unauthorized(path: string) {
   // RFC 9728: point clients at the metadata for this exact resource.
-  const wwwAuth = `Bearer resource_metadata="${MCP_PUBLIC_BASE}/.well-known/oauth-protected-resource${suffix}"`;
+  const wwwAuth = `Bearer resource_metadata="${MCP_PUBLIC_BASE}/.well-known/oauth-protected-resource${path}"`;
   return httpJson(401, { jsonrpc: "2.0", id: null, error: { code: -32001, message: "Unauthorized" } }, { "www-authenticate": wwwAuth });
 }
 
@@ -199,9 +187,8 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   const method = event.requestContext.http.method;
   if (method === "OPTIONS") return { statusCode: 204, headers: corsHeaders(), body: "" };
 
-  const target = scopeFromPath(event.rawPath || "");
+  const target = mcpPath(event.rawPath || "");
   if (!target) return httpJson(404, { error: "not_found" });
-  const scope = target.scope;
 
   // We do not push server-initiated messages, so there is no SSE stream to open.
   if (method === "GET") return httpJson(405, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Streaming GET not supported" } }, { allow: "POST" });
@@ -210,7 +197,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   if (method !== "POST") return httpJson(405, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Method not allowed" } });
 
   const caller = await authenticate(event.headers?.authorization || event.headers?.Authorization);
-  if (!caller) return unauthorized(scope);
+  if (!caller) return unauthorized(target.path);
 
   const body = event.isBase64Encoded ? Buffer.from(event.body ?? "", "base64").toString("utf8") : (event.body ?? "");
   if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
@@ -229,6 +216,20 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   const accepted = { statusCode: 202, headers: { ...corsHeaders(), ...sessionHeader }, body: "" };
 
   const d = deps(caller.uid);
+  let scope: Scope | undefined;
+  if (target.endpointId) {
+    try {
+      const machines = await d.listMachines();
+      scope = resolveEndpoint(machines, target.endpointId);
+      if (!scope) return httpJson(404, { error: "not_found" });
+      // Dispatch from the same tenant catalog that resolved the UUID.
+      d.listMachines = async () => machines;
+    } catch (err) {
+      logEvent("mcp_catalog_error", { error: errName(err) });
+      return httpJson(500, { error: "server_error" });
+    }
+  }
+
   if (Array.isArray(parsed)) {
     // Batches run in order, not in parallel, so one request cannot fan out
     // past the machine's concurrency.

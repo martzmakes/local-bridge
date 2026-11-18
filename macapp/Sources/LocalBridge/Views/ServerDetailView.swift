@@ -29,36 +29,43 @@ struct ServerDetailView: View {
         let state = model.runState(for: name)
         let groups = model.toolGroups(for: name)
         Form {
-            Section {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(model.endpointURL(for: name))
-                        .font(.title3.monospaced())
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 8)
-                    Button(copied ? "Copied" : "Copy") {
-                        copyToPasteboard(model.endpointURL(for: name))
-                        copied = true
-                        Task {
-                            try? await Task.sleep(nanoseconds: 1_500_000_000)
-                            copied = false
+            if let endpointURL = model.endpointURL(for: name) {
+                Section {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(endpointURL)
+                            .font(.body.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 8)
+                        Button(copied ? "Copied" : "Copy") {
+                            copyToPasteboard(endpointURL)
+                            copied = true
+                            Task {
+                                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                                copied = false
+                            }
                         }
+                        .help("Copy the connector URL")
                     }
-                    .help("Copy the connector URL")
+                    .padding(.vertical, 2)
+                    HStack(spacing: 8) {
+                        Button("Add to Claude…") { connect(.claude) }
+                        Button("Add to ChatGPT…") { connect(.chatGPT) }
+                        Spacer()
+                    }
+                    LabeledContent("Last used", value: Presentation.usage(model.activity.usage(ofServer: name)))
+                } header: {
+                    Text("Connect")
+                } footer: {
+                    Text(connectHint)
+                        .formFooter()
                 }
-                .padding(.vertical, 2)
-                HStack(spacing: 8) {
-                    Button("Add to Claude…") { connect(.claude) }
-                    Button("Add to ChatGPT…") { connect(.chatGPT) }
-                    Spacer()
+            } else {
+                Section("Connect") {
+                    Text("Save this server to get its connector URL.")
+                        .foregroundStyle(.secondary)
                 }
-                LabeledContent("Last used", value: Presentation.usage(model.activity.usage(ofServer: name)))
-            } header: {
-                Text("Connect")
-            } footer: {
-                Text(connectHint)
-                    .formFooter()
             }
 
             Section {

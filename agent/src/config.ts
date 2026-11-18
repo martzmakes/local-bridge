@@ -5,6 +5,7 @@ import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { ENDPOINT_ID_RE } from "../../infra/lib/shared/mcp-path";
 import { NAME_RE, type Access } from "../../infra/lib/shared/protocol";
 import { isKeychainRef, type Keychain } from "./keychain";
 
@@ -13,6 +14,7 @@ const ToolName = z.string().min(1).max(128);
 const ToolList = z.array(ToolName).max(500).default([]);
 
 const exposure = {
+  endpointId: z.string().length(36).regex(ENDPOINT_ID_RE).optional(),
   /** Shown to MCP clients and in the macOS app. */
   title: z.string().min(1).max(64).optional(),
   /** false: the server is not started, not announced, and calls to it are `not_exposed`. */

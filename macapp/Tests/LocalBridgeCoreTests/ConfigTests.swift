@@ -136,12 +136,28 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(existing.read, ["get_note"], "an existing exposure list is never widened")
     }
 
-    func testEndpointURL() {
-        XCTAssertEqual(EndpointURL.build(publicBase: "https://bridge.martzmakes.com", machine: "mini", server: "notes"),
-                       "https://bridge.martzmakes.com/mcp/mini/notes")
-        XCTAssertEqual(EndpointURL.build(publicBase: "https://b.example/ ", machine: "air", server: "ha"), "https://b.example/mcp/air/ha")
-        XCTAssertEqual(BridgeConfig(machine: "mini").endpointURL(forServer: "notes"), "https://bridge.martzmakes.com/mcp/mini/notes")
-        XCTAssertEqual(BridgeConfig(machine: "mini", publicBase: "https://x.example").endpointURL(forServer: "n"), "https://x.example/mcp/mini/n")
+    func testEndpointURLIsAssignedOnceAndSurvivesReload() throws {
+        let store = ConfigStore(url: makeTempDir().appendingPathComponent("config.json"))
+        let legacy = BridgeConfig(machine: "mini", publicBase: "https://bridge.example/ ", servers: [
+            "notes": ServerConfig(command: "/bin/echo"),
+            "reminders": ServerConfig(command: "/bin/echo"),
+        ])
+        try Data(legacy.serialized().utf8).write(to: store.url)
+        XCTAssertEqual(store.load(), .loaded(legacy))
+        XCTAssertNil(legacy.endpointURL(forServer: "notes"))
+
+        var saved = try store.save(legacy)
+        let id = try XCTUnwrap(saved.servers["notes"]?.endpointId)
+        let endpoint = "https://bridge.example/mcp/\(id.uuidString.lowercased())"
+        XCTAssertEqual(saved.endpointURL(forServer: "notes"), endpoint)
+        XCTAssertNotEqual(saved.endpointURL(forServer: "reminders"), endpoint)
+        XCTAssertNil(saved.endpointURL(forServer: "unknown"))
+        XCTAssertEqual(store.load(), .loaded(saved))
+
+        saved.servers["notes"]?.title = "New title"
+        XCTAssertEqual(try store.save(saved).endpointURL(forServer: "notes"), endpoint)
+        saved.servers["notes"] = ServerConfig(command: "/bin/echo")
+        XCTAssertNotEqual(try store.save(saved).endpointURL(forServer: "notes"), endpoint)
     }
 
     func testProposedMachineName() {

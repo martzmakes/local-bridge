@@ -581,6 +581,7 @@ export class Connection {
     try {
       result = await this.opts.servers.callTool(call.server, call.tool, call.arguments, {
         callId,
+        endpointId: call.endpointId,
         // A deadline inside the skew allowance still gets a moment to run.
         deadline: Math.max(call.deadline, now + 1_000),
         maxResultBytes: call.maxResultBytes,

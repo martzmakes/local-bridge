@@ -42,6 +42,17 @@ describe("exposure", () => {
     expect(report!.missing).toEqual(["not_a_real_tool"]);
   });
 
+  it("announces the connector UUID and refuses a call for a stale UUID", async () => {
+    const endpointId = "b29ab3da-6ab8-4f28-9cc3-bf91ab8a22cf";
+    const m = await start({ fix: fixtureServer({ endpointId }) });
+    expect(ServerInfoSchema.parse(m.list()[0]).endpointId).toBe(endpointId);
+    const stale = call({ endpointId: "794014de-0d7e-4661-a3e8-6cd612ddeb90" });
+    expect(await m.callTool("fix", "echo", { text: "ignored" }, stale)).toMatchObject({
+      ok: false, error: { code: "not_exposed" },
+    });
+    expect(await m.callTool("fix", "echo", { text: "hello" }, call({ endpointId }))).toMatchObject({ ok: true });
+  });
+
   it("runs an exposed tool", async () => {
     const m = await start({ fix: fixtureServer() });
     const res = await m.callTool("fix", "echo", { text: "hello" }, call({ callId: "abc" }));

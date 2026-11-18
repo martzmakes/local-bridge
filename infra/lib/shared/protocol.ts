@@ -3,6 +3,7 @@
 // must depend on nothing but zod and Node's Buffer.
 // Spec: docs/superpowers/specs/2026-11-15-local-bridge-design.md section 6.
 import { z } from "zod";
+import { ENDPOINT_ID_RE } from "./mcp-path";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -26,6 +27,7 @@ export type ToolInfo = z.infer<typeof ToolInfoSchema>;
 
 export const ServerInfoSchema = z.object({
   name: NameSchema,
+  endpointId: z.string().length(36).regex(ENDPOINT_ID_RE).optional(),
   /** Display name set in the machine's app, shown to MCP clients. */
   title: z.string().max(64).optional(),
   status: z.enum(["up", "down"]),
@@ -126,6 +128,7 @@ export const CallSchema = z.object({
   type: z.literal("call"),
   callId: z.string().min(1).max(64),
   server: NameSchema,
+  endpointId: z.string().length(36).regex(ENDPOINT_ID_RE).optional(),
   tool: ToolNameSchema,
   arguments: z.record(z.string(), z.unknown()),
   /** Epoch milliseconds. The machine refuses the call after this. */
