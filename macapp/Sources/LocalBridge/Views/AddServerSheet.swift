@@ -12,8 +12,7 @@ struct AddServerSheet: View {
 
     /// Starts on what other apps on this Mac already have, unless told to start with the form.
     @State private var showingFound: Bool
-    /// Found servers the user unticked. Everything found starts ticked.
-    @State private var unticked: Set<String> = []
+    @State private var selected: Set<String> = []
 
     init(startManually: Bool = false, name: String? = nil, server: ServerConfig = ServerConfig()) {
         _showingFound = State(initialValue: !startManually)
@@ -68,12 +67,13 @@ struct AddServerSheet: View {
     // MARK: - Found on this Mac
 
     private var chosen: [DiscoveredServer] {
-        (model.discovery?.servers ?? []).filter { !unticked.contains($0.id) }
+        (model.discovery?.servers ?? []).filter { selected.contains($0.id) }
     }
 
     @ViewBuilder
     private var found: some View {
         let discovery = model.discovery
+        let remaining = BridgeConfig.maxServers - model.draft.servers.count
         Group {
             if discovery == nil {
                 VStack(spacing: 10) {
@@ -89,8 +89,6 @@ struct AddServerSheet: View {
                     Text(discovery.alreadyAdded > 0
                          ? "Every server set up in Claude, Cursor and other apps on this Mac is already here."
                          : "No MCP servers are set up in Claude Code, Claude Desktop, Cursor, Windsurf, VS Code or Codex on this Mac.")
-                } actions: {
-                    Button("Add Manually…") { showingFound = false }
                 }
             } else if let discovery {
                 Form {
@@ -99,9 +97,9 @@ struct AddServerSheet: View {
                             ForEach(discovery.servers) { server in
                                 HStack(spacing: 10) {
                                     Toggle(server.proposedTitle, isOn: Binding(
-                                        get: { !unticked.contains(server.id) },
+                                        get: { selected.contains(server.id) },
                                         set: { on in
-                                            if on { unticked.remove(server.id) } else { unticked.insert(server.id) }
+                                            if on { selected.insert(server.id) } else { selected.remove(server.id) }
                                         }))
                                         .toggleStyle(.checkbox)
                                         .labelsHidden()
@@ -118,9 +116,16 @@ struct AddServerSheet: View {
                                 }
                             }
                         } header: {
-                            Text("Found on This Mac")
+                            HStack {
+                                Text("Found on This Mac")
+                                Spacer()
+                                if !selected.isEmpty {
+                                    Button("Clear Selection") { selected.removeAll() }
+                                        .buttonStyle(.borderless)
+                                }
+                            }
                         } footer: {
-                            Text("They are added the way those apps run them, including any keys they use. Tools that only read start switched on; tools that can make changes start off. Nothing is shared until you save.")
+                            Text("Select the servers you want to import. Their credentials come with them. Review which tools are on before you save.")
                                 .formFooter()
                         }
                     }
@@ -157,6 +162,10 @@ struct AddServerSheet: View {
         HStack {
             Button("Add Manually…") { showingFound = false }
             Spacer()
+            if chosen.count > remaining {
+                Text("Choose up to \(remaining) more.")
+                    .foregroundStyle(.secondary)
+            }
             Button("Cancel", role: .cancel) { dismiss() }
                 .keyboardShortcut(.cancelAction)
             Button(chosen.count > 1 ? "Add \(chosen.count) Servers" : "Add Selected") {
@@ -164,7 +173,7 @@ struct AddServerSheet: View {
                 dismiss()
             }
             .keyboardShortcut(.defaultAction)
-            .disabled(chosen.isEmpty)
+            .disabled(chosen.isEmpty || chosen.count > remaining)
         }
         .padding(16)
     }

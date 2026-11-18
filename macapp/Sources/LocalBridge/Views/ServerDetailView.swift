@@ -119,21 +119,13 @@ struct ServerDetailView: View {
                     } else {
                         KeyValueEditor(title: "Headers", addLabel: "Add Header", values: server.headers, disabled: readOnly)
                     }
+                    Button("Remove Server…", role: .destructive, action: remove)
+                        .disabled(readOnly)
                 }
             } footer: {
-                VStack(alignment: .leading, spacing: 14) {
-                    if configurationExpanded ?? expandedByDefault {
-                        Text("Values are saved in a settings file only your user can read. A value written as keychain:<service> is read from the Keychain when the server starts.")
-                            .formFooter()
-                    }
-                    HStack {
-                        Spacer()
-                        Button(role: .destructive, action: remove) {
-                            Text("Remove Server…")
-                                .foregroundStyle(.red)
-                        }
-                        .disabled(readOnly)
-                    }
+                if configurationExpanded ?? expandedByDefault {
+                    Text("Values are saved in a settings file only your user can read. A value written as keychain:<service> is read from the Keychain when the server starts.")
+                        .formFooter()
                 }
             }
         }
@@ -297,6 +289,8 @@ struct ToolRowView: View {
     @Environment(AppModel.self) private var model
     var server: String
     var entry: ToolEntry
+    @State private var hovered = false
+    @FocusState private var tryFocused: Bool
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -317,8 +311,11 @@ struct ToolRowView: View {
                 }
             }
             Spacer(minLength: 8)
-            Button("Try…") { model.tryingTool = TryTarget(server: server, tool: entry) }
+            Button("Try…", action: tryTool)
                 .buttonStyle(.borderless)
+                .focused($tryFocused)
+                .opacity(hovered || tryFocused ? 1 : 0)
+                .accessibilityLabel("Try \(entry.name)")
                 .help("Run this tool once on this Mac and see what it returns")
             Toggle(entry.name, isOn: Binding(
                 get: { entry.isOn },
@@ -327,14 +324,20 @@ struct ToolRowView: View {
                 .toggleStyle(.switch)
                 .disabled(model.isReadOnly)
         }
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
         .contextMenu {
             if entry.access == .write {
                 Button("Treat as Read-Only") { model.moveTool(server: server, tool: entry.name, to: .read) }
             } else {
                 Button("Treat as Able to Make Changes") { model.moveTool(server: server, tool: entry.name, to: .write) }
             }
-            Button("Try…") { model.tryingTool = TryTarget(server: server, tool: entry) }
+            Button("Try…", action: tryTool)
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private func tryTool() {
+        model.tryingTool = TryTarget(server: server, tool: entry)
     }
 }

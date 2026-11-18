@@ -53,8 +53,7 @@ struct MainView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .toolbar {
-                // Only while there is something to save, and only where editing happens.
-                if model.isDirty, !model.isReadOnly, isEditingServer {
+                if model.isDirty, !model.isReadOnly {
                     ToolbarItemGroup(placement: .primaryAction) {
                         Button("Revert") { model.revert() }
                             .help("Discard the changes you have not saved")
@@ -89,11 +88,6 @@ struct MainView: View {
             Text("Its connector URL stops working once you save. The server itself is not touched.")
         }
         .task { await model.loadMachines() }
-    }
-
-    private var isEditingServer: Bool {
-        if case .server(let name)? = model.selection { return model.draft.servers[name] != nil }
-        return false
     }
 
     @ViewBuilder

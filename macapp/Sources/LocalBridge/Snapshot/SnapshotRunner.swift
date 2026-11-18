@@ -51,8 +51,10 @@ enum SnapshotRunner {
             NSRunningApplication.current.activate(options: [.activateAllWindows])
         }
 
+        let selected = ProcessInfo.processInfo.environment["LOCAL_BRIDGE_SNAPSHOT_SCREENS"]?
+            .split(separator: ",").map(String.init)
         var failures = 0
-        for screen in screens() {
+        for screen in screens() where selected?.contains(screen.name) ?? true {
             for (suffix, appearanceName) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
                 let url = directory.appendingPathComponent("\(screen.name)-\(suffix).png")
                 let model = AppModel(preview: screen.state, directory: directory)
