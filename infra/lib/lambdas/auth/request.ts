@@ -32,22 +32,53 @@ function response(statusCode: number, body: Record<string, unknown>) {
   };
 }
 
+// The public homepage can collect interest without ever sending a sign-in link.
+async function joinWaitlist(email: string, interest: unknown) {
+  if (!WAITLIST_TABLE) return response(503, { error: "waitlist_unavailable" });
+  try {
+    await ddb.send(new PutCommand({
+      TableName: WAITLIST_TABLE,
+      Item: {
+        email,
+        prototype: PROJECT_SLUG,
+        createdAt: Date.now(),
+        ...(interest === "free" || interest === "plus" || interest === "self-host" ? { interest } : {}),
+      },
+      ConditionExpression: "attribute_not_exists(email)",
+    }));
+  } catch (error) {
+    if ((error as { name?: string }).name !== "ConditionalCheckFailedException") {
+      return response(503, { error: "waitlist_unavailable" });
+    }
+  }
+  return response(200, { ok: true });
+}
+
 export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   if (event.requestContext.http.method === "OPTIONS") {
     return response(204, {});
   }
 
-  let parsed: { email?: string };
+  if (Buffer.byteLength(event.body || "", "utf8") > 4096) {
+    return response(413, { error: "payload_too_large" });
+  }
+  let parsed: { email?: unknown; interest?: unknown; referrer?: unknown };
   try {
-    parsed = JSON.parse(event.body || "{}");
+    const value: unknown = JSON.parse(event.body || "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return response(400, { error: "invalid_json" });
+    }
+    parsed = value;
   } catch {
     return response(400, { error: "invalid_json" });
   }
 
-  const email = (parsed.email || "").trim().toLowerCase();
+  const email = typeof parsed.email === "string" ? parsed.email.trim().toLowerCase() : "";
   if (!email || !EMAIL_RE.test(email) || email.length > 254) {
     return response(400, { error: "invalid_email" });
   }
+
+  if (event.rawPath === "/api/waitlist") return joinWaitlist(email, parsed.interest);
 
   // Non-allowlisted → waitlist. Interested visitors are captured as a demand
   // signal instead of silently dropped. Allowlisted owner email falls through
@@ -63,7 +94,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
               prototype: PROJECT_SLUG,
               createdAt: Date.now(),
               createdAtIso: new Date().toISOString(),
-              referrer: (parsed as { referrer?: string }).referrer || null,
+              referrer: typeof parsed.referrer === "string" ? parsed.referrer.slice(0, 254) : null,
             },
             // Don't overwrite an earlier signup timestamp for the same email.
             ConditionExpression: "attribute_not_exists(email)",

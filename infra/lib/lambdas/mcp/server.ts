@@ -18,6 +18,7 @@ import { verifyJwt } from "../auth/lib/jwt";
 import { GoneError } from "../bridge/dispatch";
 import { isValidAgentId } from "../bridge/names";
 import { ConnectionGone, errName, getSecret, getStore, logEvent, pushToConnection } from "../bridge/runtime";
+import { HOSTED_PLANS, limitHostedCatalog } from "../billing/plans";
 import { uidFromEmail } from "../bridge/tenant";
 import { callTool, findServer, listTools, resolveEndpoint, type BridgeDeps, type Caller, type Scope } from "./bridge";
 
@@ -36,9 +37,19 @@ const INSTRUCTIONS =
 /** Everything a request can touch, bound to the account of its verified token. */
 function deps(uid: string): BridgeDeps {
   const store = getStore().forTenant(uid);
+  const hosted = process.env.HOSTED_BILLING === "1";
+  let billing: ReturnType<typeof store.getBilling> | undefined;
+  const plan = async () => (await (billing ??= store.getBilling())).plus ? "plus" as const : "free" as const;
   return {
     getAgent: (id) => store.getAgent(id),
-    listMachines: () => store.listMachines(),
+    listMachines: async () => {
+      const machines = await store.listMachines();
+      return hosted ? limitHostedCatalog(machines, await plan()) : machines;
+    },
+    ...(hosted ? {
+      takeHostedCall: async () => store.takeRate(
+        "__hosted__", new Date().toISOString().slice(0, 7), HOSTED_PLANS[await plan()].callsPerMonth, 62 * 86_400),
+    } : {}),
     takeRate: (a, w, l, t) => store.takeRate(a, w, l, t),
     putAudit: (row) => store.putAudit(row),
     hmacKey: () => getSecret(process.env.AUDIT_HMAC_PARAM!),

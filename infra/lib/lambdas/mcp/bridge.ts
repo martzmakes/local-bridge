@@ -46,6 +46,7 @@ export interface BridgeDeps extends DispatchDeps {
   takeRate(agent: string, window: string, limit: number, ttlSeconds: number): Promise<boolean>;
   putAudit(row: AuditRow): Promise<void>;
   hmacKey(): Promise<string>;
+  takeHostedCall?(): Promise<boolean>;
   listStaleTools: boolean;
   auditRetentionDays: number;
   newCallId?: () => string;
@@ -314,6 +315,10 @@ export async function callTool(caller: Caller, name: string, rawArgs: Record<str
 
   if (entry.serverStatus !== "up" && entry.machine.meta.connectionId) {
     return finish("offline", "server_down", errorResult(`${entry.ref.machine}.${entry.ref.server} is down. Call ${HEALTH_TOOL} for details.`));
+  }
+
+  if (deps.takeHostedCall && !await deps.takeHostedCall()) {
+    return finish("rate_limited", "monthly_account_limit", errorResult("Your hosted account reached its monthly tool-call limit."));
   }
 
   const maxResultBytes = Math.min(limits.maxResultBytes, decision.rule.result?.maxBytes ?? limits.maxResultBytes, HARD_MAX_RESULT_BYTES);

@@ -19,15 +19,6 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as path from "path";
 
 const PROJECT_SLUG = "local-bridge";
-const DOMAIN = "bridge.martzmakes.com";
-// The machine channel (WebSocket API) gets its own hostname so a machine's
-// config survives the API being recreated.
-const WS_DOMAIN = "bridge-ws.martzmakes.com";
-// Send via the shared parent-zone SES identity (verified once, account-wide
-// for martzmakes.com). Avoids per-prototype EmailIdentity collisions. If
-// your DOMAIN is NOT a martzmakes-subdomain, override SES_FROM with a
-// per-stack-verified identity and add `ses.EmailIdentity` back below.
-const SES_FROM = "Local Bridge <no-reply@martzmakes.com>";
 const JWT_SECRET_NAME = `/${PROJECT_SLUG}/jwt-secret`;
 const AUDIT_HMAC_PARAM = `/${PROJECT_SLUG}/audit-hmac-key`;
 const AUDIT_RETENTION_DAYS = 90;
@@ -35,6 +26,22 @@ const AUDIT_RETENTION_DAYS = 90;
 export class LocalBridgeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    const DOMAIN = process.env.LOCAL_BRIDGE_DOMAIN ?? "bridge.martzmakes.com";
+    const WS_DOMAIN = process.env.LOCAL_BRIDGE_WS_DOMAIN ?? "bridge-ws.martzmakes.com";
+    const zoneName = process.env.LOCAL_BRIDGE_ZONE_NAME ?? "martzmakes.com";
+    const zoneParameter = process.env.LOCAL_BRIDGE_ZONE_PARAM ?? "/local-bridge/route53-zone-id";
+    const certificateParameter = process.env.LOCAL_BRIDGE_CERT_PARAM ?? "/local-bridge/certificate-arn";
+    const SES_FROM = process.env.LOCAL_BRIDGE_SES_FROM ?? "Local Bridge <no-reply@martzmakes.com>";
+    const billingEnabled = process.env.LOCAL_BRIDGE_ENABLE_BILLING === "1";
+    const planEnv: Record<string, string> = billingEnabled ? { HOSTED_BILLING: "1" } : {};
+    const allowedEmails = (process.env.LOCAL_BRIDGE_ALLOWED_EMAILS ?? "operator@example.com")
+      .split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
+    if (!allowedEmails.length) throw new Error("LOCAL_BRIDGE_ALLOWED_EMAILS requires at least one email");
+    if (DOMAIN === WS_DOMAIN || ![DOMAIN, WS_DOMAIN].every(name => name === zoneName || name.endsWith('.' + zoneName))) {
+      throw new Error("The HTTPS and WebSocket hostnames must be distinct and inside LOCAL_BRIDGE_ZONE_NAME");
+    }
+    const recordName = (host: string) => host === zoneName ? zoneName + "." : host.slice(0, -(zoneName.length + 1));
 
     // -------------------------------------------------------------------
     // DynamoDB
@@ -123,7 +130,7 @@ export class LocalBridgeStack extends cdk.Stack {
       // Wired into the SHARED lambda env defaults (not just auth-issuance
       // lambdas) because verifyJwt() re-checks this on every call, not just
       // at token mint time — every lambda that verifies a JWT needs it.
-      ALLOWED_EMAILS: "operator@example.com",
+      ALLOWED_EMAILS: allowedEmails.join(","),
     };
 
     const lambdaDefaults = {
@@ -198,6 +205,16 @@ export class LocalBridgeStack extends cdk.Stack {
     magicLinkTokensTable.grantReadWriteData(verifyMagicLinkHandler);
     usersTable.grantReadWriteData(verifyMagicLinkHandler);
     usersTable.grantReadWriteData(meHandler);
+
+    authHttpApi.addRoutes({
+      path: "/api/waitlist",
+      methods: [apigwv2.HttpMethod.POST],
+      integration: new apigwv2Integrations.HttpLambdaIntegration("WaitlistIntegration", requestMagicLinkHandler),
+    });
+    const httpStage = authHttpApi.defaultStage?.node.defaultChild as apigwv2.CfnStage;
+    httpStage.routeSettings = {
+      "POST /api/waitlist": { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 8 },
+    };
     oauthTable.grantReadWriteData(verifyMagicLinkHandler); // for OAuth handoff
     jwtSecretParam.grantRead(verifyMagicLinkHandler);
     jwtSecretParam.grantRead(meHandler);
@@ -337,7 +354,7 @@ export class LocalBridgeStack extends cdk.Stack {
     const wsCertificate = acm.Certificate.fromCertificateArn(
       this,
       "WsCertificate",
-      ssm.StringParameter.valueForStringParameter(this, "/local-bridge/certificate-arn")
+      ssm.StringParameter.valueForStringParameter(this, certificateParameter)
     );
     const wsDomain = new apigwv2.DomainName(this, "DeviceWsDomain", {
       domainName: WS_DOMAIN,
@@ -360,6 +377,7 @@ export class LocalBridgeStack extends cdk.Stack {
       memorySize: 512,
       environment: {
         ...lambdaDefaults.environment,
+        ...planEnv,
         MCP_PUBLIC_BASE: `https://${DOMAIN}`,
         BRIDGE_TABLE: bridgeTable.tableName,
         WS_MANAGEMENT_ENDPOINT: wsStage.callbackUrl,
@@ -383,13 +401,52 @@ export class LocalBridgeStack extends cdk.Stack {
     // Macs). The account is always the bearer token's; see account/handler.ts.
     const accountHandler = new lambda.NodejsFunction(this, "AccountHandler", {
       ...lambdaDefaults,
-      environment: { ...lambdaDefaults.environment, BRIDGE_TABLE: bridgeTable.tableName },
+      environment: { ...lambdaDefaults.environment, ...planEnv, BRIDGE_TABLE: bridgeTable.tableName },
       entry: path.join(__dirname, "lambdas", "account", "handler.ts"),
       handler: "handler",
       logGroup: bridgeLogGroup("AccountHandlerLogs"),
     });
     jwtSecretParam.grantRead(accountHandler);
     bridgeTable.grantReadWriteData(accountHandler);
+
+    // Waitlist joins never use these routes. Enable billing only for accounts invited to sign in.
+    if (billingEnabled) {
+      const stripeKey = ssm.StringParameter.fromSecureStringParameterAttributes(this, "StripeKey", {
+        parameterName: "/local-bridge/stripe-secret-key",
+      });
+      const webhookSecret = ssm.StringParameter.fromSecureStringParameterAttributes(this, "StripeWebhookSecret", {
+        parameterName: "/local-bridge/stripe-webhook-secret",
+      });
+      const billing = new lambda.NodejsFunction(this, "BillingHandler", {
+        ...lambdaDefaults,
+        timeout: cdk.Duration.seconds(29),
+        environment: {
+          ...lambdaDefaults.environment,
+          SITE_URL: `https://${DOMAIN}`,
+          BRIDGE_TABLE: bridgeTable.tableName,
+          STRIPE_KEY_PARAM: stripeKey.parameterName,
+          STRIPE_WEBHOOK_PARAM: webhookSecret.parameterName,
+        },
+        entry: path.join(__dirname, "lambdas", "billing", "handler.ts"),
+        handler: "handler",
+        logGroup: bridgeLogGroup("BillingLogs"),
+      });
+      jwtSecretParam.grantRead(billing);
+      stripeKey.grantRead(billing);
+      webhookSecret.grantRead(billing);
+      bridgeTable.grantReadWriteData(billing);
+      for (const [pathName, method] of [
+        ["status", apigwv2.HttpMethod.GET],
+        ["checkout", apigwv2.HttpMethod.POST],
+        ["portal", apigwv2.HttpMethod.POST],
+        ["webhook", apigwv2.HttpMethod.POST],
+      ] as const) {
+        authHttpApi.addRoutes({
+          path: "/api/billing/" + pathName, methods: [method],
+          integration: new apigwv2Integrations.HttpLambdaIntegration("Billing" + pathName, billing),
+        });
+      }
+    }
     for (const [p, methods] of [
       ["/api/me", [apigwv2.HttpMethod.GET]],
       ["/api/machines", [apigwv2.HttpMethod.GET]],
@@ -474,18 +531,18 @@ export class LocalBridgeStack extends cdk.Stack {
     // back) — the inline pattern below is the autonomous-deploy default.
     const wildcardCertArn = ssm.StringParameter.valueForStringParameter(
       this,
-      "/local-bridge/certificate-arn"
+      certificateParameter
     );
     const parentZoneId = ssm.StringParameter.valueForStringParameter(
       this,
-      "/local-bridge/route53-zone-id"
+      zoneParameter
     );
     const hostedZone = route53.HostedZone.fromHostedZoneAttributes(
       this,
       "HostedZone",
       {
         hostedZoneId: parentZoneId,
-        zoneName: "martzmakes.com",
+        zoneName,
       }
     );
     const certificate = acm.Certificate.fromCertificateArn(
@@ -601,15 +658,9 @@ function handler(event) {
       // flow through untouched (preserves anti-existence-leak invariants).
     });
 
-    // Subdomain A-record under the shared martzmakes.com parent zone.
-    // DOMAIN is e.g. "proto-<slug>.martzmakes.com" — recordName is the
-    // subdomain prefix only (Route53 appends the zoneName automatically).
-    const subdomainPrefix = DOMAIN.endsWith(".martzmakes.com")
-      ? DOMAIN.slice(0, -".martzmakes.com".length)
-      : DOMAIN;
     new route53.ARecord(this, "DeviceWsAliasRecord", {
       zone: hostedZone,
-      recordName: WS_DOMAIN.slice(0, -".martzmakes.com".length),
+      recordName: recordName(WS_DOMAIN),
       target: route53.RecordTarget.fromAlias(
         new route53Targets.ApiGatewayv2DomainProperties(
           wsDomain.regionalDomainName,
@@ -620,7 +671,7 @@ function handler(event) {
 
     new route53.ARecord(this, "SubdomainAliasRecord", {
       zone: hostedZone,
-      recordName: subdomainPrefix,
+      recordName: recordName(DOMAIN),
       target: route53.RecordTarget.fromAlias(
         new route53Targets.CloudFrontTarget(distribution)
       ),

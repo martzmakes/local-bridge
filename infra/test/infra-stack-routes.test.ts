@@ -102,6 +102,12 @@ describe("LocalBridgeStack", () => {
     template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "DELETE /api/machines/{machine}" });
   });
 
+  it("publishes the waitlist without enabling billing by default", () => {
+    template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: "POST /api/waitlist" });
+    const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
+    expect(routes.some(route => String(route.Properties.RouteKey).includes("/api/billing/"))).toBe(false);
+  });
+
   it("retains bridge Lambda logs for 30 days", () => {
     template.resourcePropertiesCountIs("AWS::Logs::LogGroup", { RetentionInDays: 30 }, 4);
   });

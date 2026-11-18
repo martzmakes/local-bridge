@@ -143,6 +143,68 @@ export class Store {
     return Math.floor(this.now() / 1000) + seconds;
   }
 
+  private get billingKey() {
+    return { pk: "BILLING#" + this.requireTenant(), sk: "META" };
+  }
+
+  async getBilling(): Promise<{ customer?: string; plus?: boolean }> {
+    const result = await this.ddb.send(new GetCommand({
+      TableName: this.table, Key: this.billingKey, ConsistentRead: true,
+    }));
+    return result.Item ?? {};
+  }
+
+  async setBillingCustomer(customer: string): Promise<void> {
+    await this.ddb.send(new UpdateCommand({
+      TableName: this.table, Key: this.billingKey,
+      UpdateExpression: "SET customer = :c",
+      ConditionExpression: "attribute_not_exists(customer) OR customer = :c",
+      ExpressionAttributeValues: { ":c": customer },
+    }));
+  }
+
+  async recordBillingPlan(customer: string, checkedAt: number, plus: boolean): Promise<void> {
+    try {
+      await this.ddb.send(new UpdateCommand({
+        TableName: this.table, Key: this.billingKey,
+        UpdateExpression: "SET plus = :plus, billingCheckedAt = :t",
+        ConditionExpression: "customer = :c AND (attribute_not_exists(billingCheckedAt) OR billingCheckedAt < :t)",
+        ExpressionAttributeValues: { ":c": customer, ":plus": plus, ":t": checkedAt },
+      }));
+    } catch (error) {
+      if (!isConditionalFailure(error)) throw error;
+    }
+  }
+
+  async claimBillingCheckout(customer: string, lock: string): Promise<boolean> {
+    const now = this.now();
+    try {
+      await this.ddb.send(new UpdateCommand({
+        TableName: this.table, Key: this.billingKey,
+        UpdateExpression: "SET checkoutLock = :l, checkoutUntil = :u",
+        ConditionExpression: "customer = :c AND (attribute_not_exists(checkoutUntil) OR checkoutUntil < :n)",
+        ExpressionAttributeValues: { ":c": customer, ":l": lock, ":u": now + 60_000, ":n": now },
+      }));
+      return true;
+    } catch (error) {
+      if (!isConditionalFailure(error)) throw error;
+      return false;
+    }
+  }
+
+  async releaseBillingCheckout(lock: string): Promise<void> {
+    try {
+      await this.ddb.send(new UpdateCommand({
+        TableName: this.table, Key: this.billingKey,
+        UpdateExpression: "REMOVE checkoutLock, checkoutUntil",
+        ConditionExpression: "checkoutLock = :l",
+        ExpressionAttributeValues: { ":l": lock },
+      }));
+    } catch (error) {
+      if (!isConditionalFailure(error)) throw error;
+    }
+  }
+
   // ---- agents -------------------------------------------------------------
 
   async getAgent(id: string): Promise<{ meta: AgentMeta; rules: Rule[] } | null> {

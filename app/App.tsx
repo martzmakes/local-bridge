@@ -7,7 +7,7 @@ import { HomeScreen } from "./src/components/HomeScreen";
 import { theme } from "./src/theme";
 
 export default function App() {
-  const { status, user, error, requestMagicLink, signOut } = useAuth();
+  const { status, user, jwt, error, requestMagicLink, signOut } = useAuth();
 
   if (status === "loading") {
     return (
@@ -30,7 +30,7 @@ export default function App() {
   return (
     <>
       <StatusBar style="light" />
-      <HomeScreen user={user} onSignOut={signOut} />
+      <HomeScreen user={user} jwt={jwt} onSignOut={signOut} />
     </>
   );
 }

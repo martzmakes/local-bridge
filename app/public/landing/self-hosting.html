@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Run Local Bridge in an AWS account you control.">
+  <link rel="icon" type="image/png" href="/landing/icon.png">
+  <link rel="stylesheet" href="/landing/site.css">
+  <title>Self-host on AWS — Local Bridge</title>
+</head>
+<body>
+  <header class="topbar">
+    <nav class="shell nav" aria-label="Main navigation">
+      <a class="brand" href="/"><img src="/landing/icon.png" width="30" height="30" alt=""> Local Bridge</a>
+      <a class="button button-small" href="/#plans">See hosted plans</a>
+    </nav>
+  </header>
+  <main class="shell guide">
+    <p class="eyebrow">Self-hosting</p>
+    <h1>Run it on your AWS account.</h1>
+    <p>The Mac app uses your bridge endpoints. You control the AWS account, sign-in allowlist, and machine registrations.</p>
+    <ol>
+      <li><strong>Prepare your AWS account.</strong> Create two hostnames in a Route 53 zone, an ACM certificate covering both names, and a verified SES sender. The stack deploys to US East (N. Virginia).</li>
+      <li><strong>Deploy the CDK stack.</strong> Set the HTTPS and WebSocket addresses, sender, and allowed emails. Create signing secrets in Systems Manager Parameter Store.</li>
+      <li><strong>Connect your Mac.</strong> Set the app’s HTTPS and WebSocket addresses to the ones from your stack, then sign in and add your MCP servers.</li>
+    </ol>
+    <p>Deploying requires the source checkout. The repository is private while the open-source release is in preparation.</p>
+    <a class="button button-dark" href="https://github.com/martzmakes/local-bridge">Local Bridge on GitHub <span aria-hidden="true">↗</span></a>
+  </main>
+</body>
+</html>

@@ -12,6 +12,8 @@ The Mac dials out to AWS over one WebSocket. No inbound ports, no VPN. A tool is
 - macOS permissions each local server needs: [`docs/permissions.md`](docs/permissions.md)
 - First-time setup and deploy: [`docs/setup.md`](docs/setup.md)
 
+See the [self-hosting guide](docs/self-hosting.md) and [hosted service costs and plans](docs/hosted-service.md).
+
 ## Layout
 
 | Path | What |

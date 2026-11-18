@@ -9,6 +9,7 @@ import { z } from "zod";
 import { NAME_RE, OFFLINE_AFTER_MS } from "../../shared/protocol";
 import { verifyJwt } from "../auth/lib/jwt";
 import { errName, getStore, logEvent } from "../bridge/runtime";
+import { HOSTED_PLANS } from "../billing/plans";
 import type { DeviceKey, Store } from "../bridge/store";
 import { MAX_MACHINES_PER_ACCOUNT, uidFromEmail } from "../bridge/tenant";
 
@@ -78,8 +79,11 @@ export async function handleAccount(req: AccountRequest, root: Store, now: () =>
       const existing = await store.getMachine(machine);
       if (!existing) {
         const count = (await store.listMachines()).length;
-        if (count >= MAX_MACHINES_PER_ACCOUNT) {
-          return fail(409, "machine_limit", `an account can have at most ${MAX_MACHINES_PER_ACCOUNT} machines; remove one first`);
+        const limit = process.env.HOSTED_BILLING === "1"
+          ? HOSTED_PLANS[(await store.getBilling()).plus ? "plus" : "free"].machines
+          : MAX_MACHINES_PER_ACCOUNT;
+        if (count >= limit) {
+          return fail(409, "machine_limit", `your account can have at most ${limit} Macs. Remove one or upgrade your plan.`);
         }
       }
       const kid = kidFor(parsed.data.jwk.x);
