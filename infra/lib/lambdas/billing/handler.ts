@@ -102,15 +102,23 @@ export const handler: APIGatewayProxyHandlerV2 = async event => {
     if (!await store.claimBillingCheckout(customer, lock)) return json(409, { error: "checkout_busy" });
     try {
       if ((await syncPlan(client, uid, customer)).hasSubscription) return json(409, { error: "manage_existing_subscription" });
-      const open = await client.checkout.sessions.list({ customer, status: "open", limit: 1 });
-      if (open.data[0]?.url) return json(200, { url: open.data[0].url });
       const prices = await client.prices.list({ lookup_keys: [PLUS_LOOKUP_KEYS[interval]], active: true, limit: 1 });
       const price = prices.data[0];
-      if (!price?.recurring) return json(503, { error: "price_unavailable" });
+      const product = typeof price?.product === "string" ? price.product : price?.product.id;
+      if (product !== "local_bridge_plus" || price?.currency !== "usd" ||
+          price.recurring?.interval !== (interval === "monthly" ? "month" : "year") ||
+          price.recurring.interval_count !== 1) {
+        return json(503, { error: "price_unavailable" });
+      }
+      const open = await client.checkout.sessions.list({ customer, status: "open", limit: 1 });
+      const existing = open.data[0];
+      if (existing?.url && existing.metadata?.price === price.id) return json(200, { url: existing.url });
+      if (existing) await client.checkout.sessions.expire(existing.id);
       const session = await client.checkout.sessions.create({
         customer,
         mode: "subscription",
         line_items: [{ price: price.id, quantity: 1 }],
+        metadata: { price: price.id },
         subscription_data: { metadata: { project: PROJECT, uid } },
         success_url: site + "/account?billing=success",
         cancel_url: site + "/account?billing=cancelled",
