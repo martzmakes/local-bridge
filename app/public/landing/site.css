@@ -195,8 +195,27 @@ h3 { font-size: clamp(23px, 2.7vw, 34px); line-height: 1.05; letter-spacing: -.0
   .waitlist button { justify-self: start; }
 }
 
-.guide { padding: clamp(72px, 9vw, 110px) 0; max-width: 760px; }
-.guide h1 { max-width: 690px; font-size: clamp(48px, 7.8vw, 88px); }
-.guide p:not(.eyebrow), .guide li { margin-top: 20px; color: var(--muted); font-size: 17px; line-height: 1.6; }
-.guide ol { margin-block: 28px; padding-inline-start: 25px; }
-.guide li { padding-inline-start: 6px; }
+.guide { max-width: 800px; padding-block: clamp(48px, 7vw, 88px); }
+.guide h1 { max-width: 740px; font-size: clamp(46px, 7.2vw, 78px); }
+.guide h2 { margin-top: clamp(40px, 6vw, 56px); font-size: clamp(27px, 4vw, 40px); line-height: 1.1; letter-spacing: -.04em; scroll-margin-top: 24px; }
+.guide h3 { margin-top: 28px; font-size: clamp(20px, 3vw, 25px); line-height: 1.2; }
+.guide p:not(.eyebrow), .guide li { color: var(--muted); font-size: 16px; line-height: 1.6; }
+.guide p:not(.eyebrow), .guide ol, .guide ul, .guide table, .guide pre { margin-block: 14px; }
+.guide h1 + p { margin-top: 20px; font-size: clamp(17px, 2.5vw, 21px); }
+.guide ol, .guide ul { padding-inline-start: 25px; }
+.guide li + li { margin-top: 7px; }
+.guide a { color: #443790; font-weight: 630; text-decoration: underline; text-underline-offset: 3px; }
+.guide-index { margin-top: 28px; padding: 18px 20px; border-radius: 16px; background: #eeedf9; }
+.guide-index ul { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px; margin-bottom: 0; padding: 0; list-style: none; }
+.guide-index li + li { margin: 0; }
+.guide table { width: 100%; border-collapse: collapse; text-align: start; font-size: 15px; line-height: 1.5; }
+.guide th, .guide td { padding: 10px 12px; border-bottom: 1px solid #dbdbe7; text-align: start; vertical-align: top; overflow-wrap: anywhere; }
+.guide th { background: #eeedf9; font-weight: 690; }
+.guide code { font: .86em ui-monospace, SFMono-Regular, Menlo, monospace; }
+.guide :not(pre) > code { padding: 2px 4px; border-radius: 4px; background: #ecebf5; overflow-wrap: anywhere; }
+.guide pre { overflow-x: auto; padding: 15px 18px; border-radius: 12px; background: #171b2e; color: #f6f6ff; line-height: 1.45; }
+.guide pre:focus-visible { outline: 3px solid #6b66e7; outline-offset: 3px; }
+@media (max-width: 540px) {
+  .guide-index ul { grid-template-columns: 1fr; }
+  .guide th, .guide td { padding-inline: 7px; }
+}

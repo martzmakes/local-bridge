@@ -1,66 +1,58 @@
 # Local Bridge
 
-Local Bridge connects remote Model Context Protocol (MCP) clients to tools running on your Mac. Use it with local servers for Notes, Messages, and Reminders, or add your own stdio MCP server.
+Local Bridge lets remote Model Context Protocol (MCP) clients use tools that run on your Mac. From the macOS app, you pick which local servers to share and turn on individual tools. Each server gets a connector URL you can add to an MCP client that supports remote custom connectors.
 
-You manage it from the Local Bridge macOS app (`macapp/`): add a local MCP server, switch on the tools you want exposed, and that server becomes its own remote MCP endpoint with its own URL and its own tools, unchanged. One sign-in covers every endpoint.
+For example, you could let an assistant search Messages for a detail, give it permission to create or complete a reminder, and let it draft or update a note. You decide which tools are available for each server. Tools that make changes start off.
 
-The Mac dials out to AWS over one WebSocket. A tool is reachable only if you switch it on in the app. Tools that make changes start off. The cloud relay uses API Gateway, Lambda and DynamoDB. [Architecture](https://bridge.martzmakes.com/#how)
+[Project site](https://bridge.martzmakes.com/) · [Download for Mac](https://bridge.martzmakes.com/updates/LocalBridge-Mac-0.3.1.zip) · [Self-hosting walkthrough](docs/self-hosting.md)
+
+## What runs where
+
+```mermaid
+flowchart LR
+    client["Remote MCP client"] <-->|"HTTPS and OAuth"| relay["AWS relay"]
+    mac["Local Bridge on your Mac"] <-->|"WebSocket opened by the Mac"| relay
+    mac <-->|"Local MCP"| servers["Messages, Notes, Reminders, or your own tools"]
+```
+
+- **On the Mac**, Local Bridge manages the tools you share. It runs a Node.js daemon that starts configured local MCP servers and maintains an outbound WebSocket. You can import server configurations from supported apps or add a command by hand.
+- **On AWS**, CloudFront and API Gateway receive HTTPS requests. Lambda checks access and relays approved calls to the Mac. DynamoDB tracks registrations and in-flight calls so a reply can reach the right request. SES sends magic-link email.
+- **In your MCP client**, add the URL from the Mac app. The bridge authenticates the client before returning a tool list or forwarding a call. Keep the Mac awake and connected when you want to use its tools.
+
+Calls to an offline Mac fail promptly and expire rather than waiting for it to wake. The Mac does not need an inbound port or VPN. Tool inputs and results pass through the bridge for the call. Audit entries record metadata such as tool name, timing and outcome. [Detailed architecture](https://bridge.martzmakes.com/#how) · [Threat model](docs/threat-model.md)
 
 ## Get started
 
-1. Install the [Mac app](https://bridge.martzmakes.com/updates/LocalBridge-Mac-0.3.1.zip). It needs macOS 14 or newer, Apple silicon, and Node.js 22 or newer.
-2. Sign in with an invitation, or deploy the bridge to your AWS account using the [self-hosting guide](docs/self-hosting.md). For self-hosting, choose **Choose Backend… → Self-hosted** before signing in.
-3. Add a local MCP server and review the tools you want to share. Copy the server's connector URL and add it in your MCP client.
+1. Install the [Mac app](https://bridge.martzmakes.com/updates/LocalBridge-Mac-0.3.1.zip). It needs an Apple silicon Mac, macOS 14 or newer, and Node.js 22 or newer.
+2. **Hosted:** sign in with an invitation. Public hosted signups are [waitlist-only](https://bridge.martzmakes.com/#plans). **Self-hosted:** follow the [AWS walkthrough](docs/self-hosting.md), then choose **Choose Backend… → Self-hosted** before signing in. The walkthrough includes AWS console steps, deployment commands, and a demo server.
+3. Click **+** in Local Bridge to import a local MCP server or enter its command. Enable the tools you want to share, then click **Save**. Some servers need macOS permissions for the apps or databases they access. [macOS permissions](docs/permissions.md)
+4. Copy the server's URL from **Connect**, add it to your remote MCP client, and authenticate. Start with a read tool while the Mac is online.
 
-Hosted signup is [waitlist-only](https://bridge.martzmakes.com/#plans). For AWS usage estimates, see [hosted service costs](docs/hosted-service.md).
+Local Bridge provides the relay and the macOS controls. Install or supply the local MCP servers for the apps you want to use.
 
-- Design: [`v1`](docs/superpowers/specs/2026-11-15-local-bridge-design.md), then [`v2: the app and per-server endpoints`](docs/superpowers/specs/2026-11-15-mac-app-per-server-endpoints-design.md), which wins where they differ
-- Plans and status: [`v1`](docs/superpowers/plans/2026-11-15-local-bridge.md), [`v2`](docs/superpowers/plans/2026-11-15-mac-app-per-server-endpoints.md)
-- Day-to-day commands: [`docs/operations.md`](docs/operations.md)
-- macOS permissions each local server needs: [`docs/permissions.md`](docs/permissions.md)
-- First-time setup and deploy: [`docs/setup.md`](docs/setup.md)
+## Connector URLs and access
 
-## Layout
+| Use | Example | What the client sees |
+| --- | --- | --- |
+| One server | `https://bridge.example.com/mcp/<uuid>` | That server's available tools under their original names, such as `search_notes`. |
+| All servers on an account | `https://bridge.example.com/mcp` | Available tools prefixed with their machine and server names, such as `mymac__notes__search_notes`. |
 
-| Path | What |
-|---|---|
-| `infra/` | CDK stack `LocalBridgeStack` and its Lambdas |
-| `infra/lib/shared/protocol.ts` | Wire protocol between a Mac and the cloud (Zod); imported by both sides |
-| `infra/lib/lambdas/bridge/` | Naming, policy, audit, rate limit, device auth, call dispatch, DynamoDB store |
-| `infra/lib/lambdas/mcp/` | The `/mcp` endpoint |
-| `infra/lib/lambdas/ws/` | WebSocket authorizer and handler for the machine channel |
-| `infra/scripts/` | `admin.ts` (agents, rules, machines, audit) and `mint.ts` (agent tokens) |
-| `agent/` | The Node daemon that starts the local servers and holds the connection; the app runs it |
-| `macapp/` | The macOS app (SwiftUI) that manages servers and supervises the daemon |
-| `app/` | Sign-in landing page (the template's Expo app) |
+Each connector UUID is an identifier. Access requires valid credentials. A regular OAuth connector sign-in uses the built-in owner identity and can use the tools the Mac exposes. For clients that accept an `Authorization: Bearer` header, create a scoped agent and mint a token. Scoped agents start with no tool access. Each write tool needs an exact allow rule and must be enabled on the Mac. [Managing agents and tokens](docs/operations.md)
 
-## Connecting an agent
+## Inside the repository
 
-Each local server has its own endpoint. The app shows the URL with a copy button.
+| Path | What it does |
+| --- | --- |
+| `macapp/` | SwiftUI app for sign-in, backend selection, per-tool controls, and daemon supervision. |
+| `agent/` | Node.js process that runs local MCP servers and connects to AWS. |
+| `infra/` | AWS CDK, Lambda handlers, WebSocket protocol, and operator CLI. |
+| `app/` | Public website and browser sign-in app. |
+| `docs/` | [Self-hosting](docs/self-hosting.md), [operations](docs/operations.md), [cost estimates](docs/hosted-service.md), and [architecture](docs/architecture.md). |
 
-- `https://bridge.martzmakes.com/mcp/<uuid>` presents one server’s tools under their own names. The app saves a random UUID for each server. The bridge resolves it within the signed-in account.
-- `https://bridge.martzmakes.com/mcp`: every server in one connector, with names like `mini__notes__search_notes`.
-
-Add a URL as a custom connector and sign in with the magic link. The sign-in is shared: after the first one, each further connector is one consent click. A connector sign-in is the owner and sees everything the app exposes on that endpoint.
-
-For a client that takes a static header, or to give an agent less than everything, mint a scoped token:
-
-```bash
-cd infra && AWS_PROFILE=your-profile npm run mint -- people --days 90
-```
-
-A scoped agent can call nothing until granted, see [`docs/operations.md`](docs/operations.md).
-
-## Tests
-
-```bash
-cd infra && npx tsc --noEmit && npx jest
-cd agent && npx tsc --noEmit && npm test
-cd macapp && swift test
-```
+The [original design](docs/superpowers/specs/2026-11-15-local-bridge-design.md) covers the WebSocket relay, data model and failure handling. The [desktop design](docs/superpowers/specs/2026-11-15-mac-app-per-server-endpoints-design.md) explains how the Mac app registers devices and manages per-server connectors.
 
 ## Contributing and security
 
-See [Contributing](CONTRIBUTING.md), the [threat model](docs/threat-model.md), and the [security reporting policy](SECURITY.md).
+See [Contributing](CONTRIBUTING.md) for building and testing each component, and the [security reporting policy](SECURITY.md) for vulnerability reports.
 
 Local Bridge is licensed under the [MIT License](LICENSE).

@@ -9,23 +9,255 @@
   <title>Self-host on AWS — Local Bridge</title>
 </head>
 <body>
+  <a class="skip" href="#main">Skip to content</a>
   <header class="topbar">
     <nav class="shell nav" aria-label="Main navigation">
       <a class="brand" href="/"><img src="/landing/icon.png" width="30" height="30" alt=""> Local Bridge</a>
       <a class="button button-small" href="/#plans">See hosted plans</a>
     </nav>
   </header>
-  <main class="shell guide">
+  <!-- Guide content mirrors docs/self-hosting.md. -->
+  <main class="shell guide" id="main">
     <p class="eyebrow">Self-hosting</p>
-    <h1>Run it on your AWS account.</h1>
-    <p>The Mac app uses your bridge endpoints. You control the AWS account, sign-in allowlist, and machine registrations.</p>
+    <h1 id="self-host-local-bridge-on-aws">Self-host Local Bridge on AWS</h1>
+    <p>This walkthrough takes you from a domain you own to your first working Local Bridge connector. AWS runs the relay and sends sign-in links. Your Mac runs the tools. Your AWS account controls the bill and the list of people who can sign in.</p>
+    <nav aria-label="On this page" class="guide-index"><strong>On this page</strong>
+<ul><li><a href="#before-you-start">Before you start</a></li><li><a href="#1-set-up-dns-in-route-53">1. Set up DNS in Route 53</a></li><li><a href="#2-request-the-https-certificate">2. Request the HTTPS certificate</a></li><li><a href="#3-verify-an-email-address-in-ses">3. Verify an email address in SES</a></li><li><a href="#4-sign-in-to-aws-from-terminal">4. Sign in to AWS from Terminal</a></li><li><a href="#5-configure-and-deploy">5. Configure and deploy</a></li><li><a href="#6-connect-the-mac-and-add-a-server">6. Connect the Mac and add a server</a></li><li><a href="#7-try-a-demo-without-personal-data">7. Try a demo without personal data</a></li><li><a href="#troubleshooting-and-updating">Troubleshooting and updating</a></li></ul></nav>
+    <h2 id="before-you-start">Before you start</h2>
+    <ul>
+<li>An Apple silicon Mac running macOS 14 or newer. Install <a href="https://bridge.martzmakes.com/updates/LocalBridge-Mac-0.3.1.zip">Local Bridge 0.3.1 or later</a>, <a href="https://nodejs.org/en/download">Node.js 22 or newer</a>, and the <a href="https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html">AWS CLI for macOS</a>.</li>
+<li>An AWS account and a sign-in with permission to deploy CDK and set up Route 53, Certificate Manager, SES, and Systems Manager. Use <strong>US East (N. Virginia)</strong> (<code>us-east-1</code>) for the certificate, email, and stack. Route 53 is global.</li>
+<li>A domain whose DNS records you can edit and an email inbox you can open.</li>
+<li>The <a href="https://github.com/martzmakes/local-bridge">Local Bridge source code</a>. The repository is private during release preparation. If you have access, choose <strong>Code → Download ZIP</strong> and unzip it. The Mac app download is a separate file.</li>
+</ul>
+    <p>AWS bills you for the hosted zone and usage. CDK will show you the changes it plans to make before deployment.</p>
+    <h3 id="worked-example">Worked example</h3>
+    <p>Use the same values in the AWS console, Terminal, and the Mac app. Replace every sample domain, email address, ID, and ARN with your own.</p>
+    <table>
+<thead>
+<tr>
+<th>What you need</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Public Route 53 hosted zone</td>
+<td><code>example.com</code></td>
+</tr>
+<tr>
+<td>Website, sign-in, and connector host</td>
+<td><code>bridge.example.com</code></td>
+</tr>
+<tr>
+<td>WebSocket host the Mac connects to</td>
+<td><code>bridge-ws.example.com</code></td>
+</tr>
+<tr>
+<td>Email sender and first sign-in</td>
+<td><code>alex@example.com</code></td>
+</tr>
+<tr>
+<td>AWS CLI profile</td>
+<td><code>local-bridge</code></td>
+</tr>
+<tr>
+<td>CDK stack name</td>
+<td><code>LocalBridgeStack</code></td>
+</tr>
+</tbody>
+</table>
+    <h2 id="1-set-up-dns-in-route-53">1. Set up DNS in Route 53</h2>
     <ol>
-      <li><strong>Prepare your AWS account.</strong> Create two hostnames in a Route 53 zone, an ACM certificate covering both names, and a verified SES sender. The stack deploys to US East (N. Virginia).</li>
-      <li><strong>Deploy the CDK stack.</strong> Set the HTTPS and WebSocket addresses, sender, and allowed emails. Create signing secrets in Systems Manager Parameter Store.</li>
-      <li><strong>Connect your Mac.</strong> In Local Bridge 0.3.1 or later, choose <strong>Choose Backend… → Self-hosted</strong> from the sign-in window. Enter the HTTPS and WebSocket URLs from CDK, then sign in and add your MCP servers.</li>
-    </ol>
-    <p>Deploying requires the source checkout. The repository is private while the open-source release is in preparation.</p>
-    <a class="button button-dark" href="https://github.com/martzmakes/local-bridge">Local Bridge on GitHub <span aria-hidden="true">↗</span></a>
+<li>Open <strong>Route 53 → Hosted zones</strong>. If Route 53 already handles DNS for your domain, open its <strong>Public</strong> hosted zone and copy the <strong>Hosted zone ID</strong>. It usually starts with <code>Z</code>.</li>
+<li>If your DNS is with another provider, you can keep your existing website and mail there. Create a <strong>public</strong> Route 53 hosted zone for a subdomain such as <code>tools.example.com</code>. In the original provider's DNS settings for <code>example.com</code>, add an <strong>NS</strong> record for <code>tools</code> that lists all four name servers from the new Route 53 zone. Use <code>tools.example.com</code> as the zone and <code>bridge.tools.example.com</code> and <code>bridge-ws.tools.example.com</code> as the two hosts throughout this guide. <a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/CreatingNewSubdomain.html">AWS subdomain delegation walkthrough</a></li>
+<li>In Terminal, run the following and compare the result with the nameservers listed in your Route 53 zone. Use <code>tools.example.com</code> instead for the delegated example. Wait for the records to match before requesting the certificate.</li>
+</ol>
+    <pre tabindex="0"><code class="language-bash">dig +short NS example.com
+</code></pre>
+    <p>Choose two unused hostnames. CDK creates their address records during deployment.</p>
+    <h2 id="2-request-the-https-certificate">2. Request the HTTPS certificate</h2>
+    <ol>
+<li>In the AWS console, select <strong>US East (N. Virginia)</strong> and open <strong>Certificate Manager</strong>. Choose <strong>Request → Request a public certificate</strong>.</li>
+<li>Add both your hostnames, for example <code>bridge.example.com</code> and <code>bridge-ws.example.com</code>. Choose <strong>DNS validation</strong> and keep the default key settings.</li>
+<li>Open the certificate. Under <strong>Domains</strong>, choose <strong>Create records in Route 53</strong> and confirm the validation records for both names. If you need to add them manually, copy the CNAME names and values ACM displays into the correct public hosted zone.</li>
+<li>Wait for the certificate status to show <strong>Issued</strong>, then copy its <strong>ARN</strong>. It starts with <code>arn:aws:acm:us-east-1:</code>. Keep the validation CNAME records so ACM can renew it. <a href="https://docs.aws.amazon.com/acm/latest/userguide/dns-validation.html">AWS certificate validation walkthrough</a></li>
+</ol>
+    <h2 id="3-verify-an-email-address-in-ses">3. Verify an email address in SES</h2>
+    <ol>
+<li>Still in <strong>US East (N. Virginia)</strong>, open <strong>Amazon SES → Verified identities → Create identity</strong>. Choose <strong>Email address</strong> and enter an inbox you control, such as <code>alex@example.com</code>.</li>
+<li>Open the Amazon SES verification email and click its link. Return to SES and check that the identity is <strong>Verified</strong>.</li>
+<li>Use that same address as both the sender and your first sign-in below. This works in the SES sandbox. To invite someone else while in the sandbox, verify their recipient email address in SES too, then add it to your Local Bridge allowlist. <a href="https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html">SES identity setup</a> · <a href="https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html">SES sandbox rules</a></li>
+</ol>
+    <h2 id="4-sign-in-to-aws-from-terminal">4. Sign in to AWS from Terminal</h2>
+    <p>Open <strong>Terminal</strong> with Spotlight. You can paste each command block as a group. Use the same Terminal window for the remaining steps so the configuration stays loaded.</p>
+    <pre tabindex="0"><code class="language-bash">node --version
+aws --version
+</code></pre>
+    <p>Look for Node <code>v22</code> or newer and AWS CLI <code>aws-cli/2</code>. If a command is missing after installation, reopen Terminal and try again.</p>
+    <p>If you already have a CLI profile for this AWS account, use its name in place of <code>local-bridge</code>. To create a profile with an AWS console sign-in, run the following with AWS CLI 2.32.0 or newer. Complete the browser sign-in with your deployment identity and choose <code>us-east-1</code> if asked for a region. <a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html">AWS CLI browser sign-in</a></p>
+    <pre tabindex="0"><code class="language-bash">aws login --profile local-bridge
+</code></pre>
+    <p>If your organization gave you an AWS access portal or uses IAM Identity Center, use <code>aws configure sso --profile local-bridge</code> and then <code>aws sso login --profile local-bridge</code>. <a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html">AWS CLI single sign-on setup</a></p>
+    <p>Now open the unzipped source folder in Terminal. Type <code>cd</code> with a space, drag the folder from Finder into Terminal, and press Return. Then check that you can see the project folders.</p>
+    <pre tabindex="0"><code class="language-bash">ls
+</code></pre>
+    <p>You should see <code>agent</code>, <code>app</code>, <code>docs</code>, <code>infra</code>, and <code>macapp</code>.</p>
+    <h2 id="5-configure-and-deploy">5. Configure and deploy</h2>
+    <h3 id="select-your-aws-account-and-enter-your-values">Select your AWS account and enter your values</h3>
+    <p>Set the profile name below to the one you just signed in with. The last line prints the account number. Confirm it matches the AWS console before continuing.</p>
+    <pre tabindex="0"><code class="language-bash">export AWS_PROFILE=local-bridge
+export AWS_REGION=us-east-1
+aws sts get-caller-identity --query Account --output text
+</code></pre>
+    <p>Replace the worked-example domain and email values. Replace both <code>REPLACE_WITH_…</code> strings with the hosted zone ID and certificate ARN you copied.</p>
+    <pre tabindex="0"><code class="language-bash">export CDK_DEFAULT_REGION="$AWS_REGION"
+export CDK_DEFAULT_ACCOUNT="$(aws sts get-caller-identity \
+  --query Account --output text)"
+
+export LOCAL_BRIDGE_ZONE_NAME=example.com
+export LOCAL_BRIDGE_DOMAIN=bridge.example.com
+export LOCAL_BRIDGE_WS_DOMAIN=bridge-ws.example.com
+export LOCAL_BRIDGE_SES_FROM='Local Bridge &lt;alex@example.com&gt;'
+export LOCAL_BRIDGE_ALLOWED_EMAILS='alex@example.com'
+
+export LOCAL_BRIDGE_STACK_NAME=LocalBridgeStack
+export LOCAL_BRIDGE_PARAMETER_PREFIX=/local-bridge
+export LOCAL_BRIDGE_ENABLE_BILLING=0
+
+export LOCAL_BRIDGE_ZONE_PARAM="$LOCAL_BRIDGE_PARAMETER_PREFIX/route53-zone-id"
+export LOCAL_BRIDGE_CERT_PARAM="$LOCAL_BRIDGE_PARAMETER_PREFIX/certificate-arn"
+ZONE_ID='REPLACE_WITH_HOSTED_ZONE_ID'
+CERTIFICATE_ARN='REPLACE_WITH_CERTIFICATE_ARN'
+</code></pre>
+    <p>With multiple users, the allowlist takes comma-separated email addresses, for example <code>'alex@example.com,sam@example.com'</code>. For a second deployment in the same account, use distinct hostnames, a different stack name, and a different parameter prefix.</p>
+    <h3 id="save-the-deployment-values-in-aws">Save the deployment values in AWS</h3>
+    <p>Run these in the same Terminal window. The last two commands generate random values and store them in Systems Manager as encrypted parameters.</p>
+    <pre tabindex="0"><code class="language-bash">aws ssm put-parameter --name "$LOCAL_BRIDGE_ZONE_PARAM" \
+  --type String --value "$ZONE_ID" &amp;&amp;
+aws ssm put-parameter --name "$LOCAL_BRIDGE_CERT_PARAM" \
+  --type String --value "$CERTIFICATE_ARN" &amp;&amp;
+aws ssm put-parameter \
+  --name "$LOCAL_BRIDGE_PARAMETER_PREFIX/jwt-secret" \
+  --type SecureString --value "$(openssl rand -hex 32)" &amp;&amp;
+aws ssm put-parameter \
+  --name "$LOCAL_BRIDGE_PARAMETER_PREFIX/audit-hmac-key" \
+  --type SecureString --value "$(openssl rand -hex 32)"
+</code></pre>
+    <p>Each successful command prints a version number. If a previous run already created a parameter, run only the commands for the missing parameters. When running one command on its own, omit the trailing <code>&amp;&amp;</code>. Keep the same signing keys for future deployments.</p>
+    <h3 id="build-the-sign-in-site-and-deploy-the-bridge">Build the sign-in site and deploy the bridge</h3>
+    <p>Run both blocks from the source folder. The first builds the sign-in website. The second prepares the account for CDK and deploys the stack. Read the proposed AWS changes before typing <code>y</code> if CDK asks for approval. A first deployment can take several minutes. <a href="https://docs.aws.amazon.com/cdk/v2/guide/bootstrapping-env.html">AWS CDK bootstrapping</a></p>
+    <pre tabindex="0"><code class="language-bash">(
+  cd app &amp;&amp;
+  npm ci &amp;&amp;
+  EXPO_PUBLIC_AUTH_API_URL="https://$LOCAL_BRIDGE_DOMAIN" \
+    npx expo export --platform web &amp;&amp;
+  cp static/manifest.json static/sw.js assets/favicon.png dist/
+)
+</code></pre>
+    <pre tabindex="0"><code class="language-bash">(
+  cd infra &amp;&amp;
+  npm ci &amp;&amp;
+  npx cdk bootstrap "aws://$CDK_DEFAULT_ACCOUNT/$AWS_REGION" &amp;&amp;
+  npx cdk deploy "$LOCAL_BRIDGE_STACK_NAME" --outputs-file cdk-outputs.json
+)
+</code></pre>
+    <p>Look for these two outputs with your hostnames. They are also saved in <code>infra/cdk-outputs.json</code>.</p>
+    <pre tabindex="0"><code class="language-text">LocalBridgeStack.PublicBaseUrl = https://bridge.example.com
+LocalBridgeStack.DeviceEndpoint = wss://bridge-ws.example.com
+</code></pre>
+    <p>Check the sign-in service before opening the Mac app. This should print JSON with an <code>issuer</code> and an <code>authorization_endpoint</code> on your HTTPS host.</p>
+    <pre tabindex="0"><code class="language-bash">curl -fsS "https://$LOCAL_BRIDGE_DOMAIN/.well-known/oauth-authorization-server"
+</code></pre>
+    <h2 id="6-connect-the-mac-and-add-a-server">6. Connect the Mac and add a server</h2>
+    <ol>
+<li>Open Local Bridge. From the sign-in window, click <strong>Choose Backend… → Self-hosted</strong>.</li>
+<li>Paste the outputs from CDK into the matching fields and click <strong>Save Backend</strong>.</li>
+</ol>
+    <table>
+<thead>
+<tr>
+<th>Field in the Mac app</th>
+<th>CDK output</th>
+<th>Worked example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Public HTTPS URL</strong></td>
+<td><code>PublicBaseUrl</code></td>
+<td><code>https://bridge.example.com</code></td>
+</tr>
+<tr>
+<td><strong>WebSocket URL</strong></td>
+<td><code>DeviceEndpoint</code></td>
+<td><code>wss://bridge-ws.example.com</code></td>
+</tr>
+</tbody>
+</table>
+    <ol start="3">
+<li>Choose <strong>Sign In with Email…</strong> and enter the allowlisted email. Open the emailed link and let your browser return to Local Bridge. Give the Mac a name such as <code>mymac</code> and click <strong>Continue</strong>. The sidebar should show that the Mac is connected.</li>
+<li>Click <strong>+</strong> to import a server you've already configured in another app, or choose <strong>Add Manually…</strong> and provide the command and arguments from your MCP server's setup instructions. Enable the tools you want to share and click <strong>Save</strong>. The server's <strong>Connect</strong> section shows a URL ending in <code>/mcp/&lt;uuid&gt;</code>.</li>
+<li>Copy that full URL into a remote MCP client that supports custom connectors, sign in with the allowlisted email, and start by asking it to run a read tool. Leave the Mac awake for this test.</li>
+</ol>
+    <p>If the app is already signed in elsewhere, use <strong>Settings → Account → Sign Out</strong> before changing the backend. Your server definitions carry over with servers turned off. Review what each one shares, then re-enable the ones you want.</p>
+    <h2 id="7-try-a-demo-without-personal-data">7. Try a demo without personal data</h2>
+    <p>The source includes a small test MCP server that can echo text. From the same Terminal window and source folder, run the following. The last two lines print the absolute paths to Node and the test server.</p>
+    <pre tabindex="0"><code class="language-bash">(cd agent &amp;&amp; npm ci) &amp;&amp;
+command -v node &amp;&amp;
+printf '%s\n' "$PWD/agent/test/fixtures/fixture-server.mjs"
+</code></pre>
+    <ol>
+<li>In Local Bridge, click <strong>+ → Add Manually…</strong>. Use the title <strong>Echo Demo</strong>, the name <code>echo</code>, and the type <strong>Runs a command on this Mac</strong>. Paste the Node path into <strong>Command</strong> and the test server path on one line in <strong>Arguments</strong>.</li>
+<li>Click <strong>Add</strong>. Once the tool list loads, right-click <code>echo</code> and choose <strong>Treat as Read-Only</strong> if it appears under <strong>Can Make Changes</strong>. Enable only <code>echo</code> and click <strong>Save</strong>.</li>
+<li>Copy the new connector URL to your MCP client and ask it to echo <code>Hello from my Mac</code>. A successful result returns that phrase. You can also hover over <code>echo</code> and click <strong>Try…</strong> in Local Bridge to check that the tool runs locally.</li>
+</ol>
+    <h2 id="troubleshooting-and-updating">Troubleshooting and updating</h2>
+    <table>
+<thead>
+<tr>
+<th>What you see</th>
+<th>What to check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ACM stays on <strong>Pending validation</strong></td>
+<td>Check the public zone is delegated from its parent and the certificate's CNAMEs are in that zone.</td>
+</tr>
+<tr>
+<td>CDK says <strong>AccessDenied</strong></td>
+<td>Run the account check again and confirm your AWS identity can bootstrap CDK and deploy CloudFormation. If your session expired, sign in again.</td>
+</tr>
+<tr>
+<td>Deployment fails</td>
+<td>In <strong>CloudFormation → Stacks</strong>, open <code>LocalBridgeStack</code> and read the first failed entry under <strong>Events</strong>. If AWS reports a hostname conflict, choose unused names and update the certificate and variables.</td>
+</tr>
+<tr>
+<td>The magic link never arrives</td>
+<td>Check spam, the exact address in <code>LOCAL_BRIDGE_ALLOWED_EMAILS</code>, and the SES identity status in <code>us-east-1</code>. In the sandbox, check the recipient's verification too.</td>
+</tr>
+<tr>
+<td>The Mac stays disconnected</td>
+<td>Check that the two addresses are in the right fields, Node is available in <strong>Settings → General</strong>, and the Mac is awake.</td>
+</tr>
+<tr>
+<td>A connector opens but shows no useful tools</td>
+<td>Enable the server and at least one tool, click <strong>Save</strong>, and confirm you're using the full connector URL from that server.</td>
+</tr>
+</tbody>
+</table>
+    <p>To redeploy, load the same profile and variables, reuse the four Systems Manager parameters, and repeat the build and deploy blocks. For the operator CLI, keep the same environment variables. For a custom website, CloudFront serves <code>app/public/landing/index.html</code> at your domain root.</p>
+    <h3 id="configure-an-older-mac-app-or-the-daemon">Configure an older Mac app or the daemon</h3>
+    <p>On a fresh installation, you can put the same settings in <code>~/.config/local-bridge/config.json</code>. Use the backend picker on an existing installation so you can sign in again and review server access.</p>
+    <pre tabindex="0"><code class="language-json">{
+  "machine": "mymac",
+  "publicBase": "https://bridge.example.com",
+  "endpoint": "wss://bridge-ws.example.com",
+  "servers": {}
+}
+</code></pre>
+    <p>If you build the daemon, install the dependencies in <code>infra/</code> first because the daemon imports the shared protocol from that directory. Then run <code>npm ci &amp;&amp; npm run build</code> in <code>agent/</code>.</p>
   </main>
 </body>
 </html>
