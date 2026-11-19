@@ -1,50 +1,18 @@
 import type { APIGatewayProxyHandlerV2 } from "aws-lambda";
 import { randomUUID } from "node:crypto";
-import Stripe from "stripe";
 import { verifyJwt } from "../auth/lib/jwt";
-import { errName, getSecret, getStore, logEvent } from "../bridge/runtime";
+import { errName, getStore, logEvent } from "../bridge/runtime";
 import { uidFromEmail } from "../bridge/tenant";
 import { HOSTED_PLANS, PLUS_LOOKUP_KEYS } from "./plans";
+import { PROJECT, stripe, syncPlan } from "./stripe";
 
 const ROOT = "/api/billing";
-const PROJECT = "local-bridge";
 const site = process.env.SITE_URL!;
-const stripeMode = process.env.STRIPE_MODE === "test" ? "test" : "live";
-let stripeClient: Stripe | undefined;
 const json = (statusCode: number, value: unknown) => ({
   statusCode,
   body: JSON.stringify(value),
   headers: { "content-type": "application/json", "cache-control": "no-store" },
 });
-
-export function subscriptionGrantsPlus(subscription: Pick<Stripe.Subscription, "status" | "items">): boolean {
-  return ["active", "trialing"].includes(subscription.status) && subscription.items.data.some(
-    item => (typeof item.price.product === "string" ? item.price.product : item.price.product.id) === "local_bridge_plus",
-  );
-}
-
-async function stripe() {
-  if (!stripeClient) {
-    const key = await getSecret(process.env.STRIPE_KEY_PARAM!);
-    const acceptedPrefixes = stripeMode === "test" ? ["rk_test_", "sk_test_", "rkcs_test_"] : ["rk_live_", "sk_live_"];
-    if (!acceptedPrefixes.some(prefix => key.startsWith(prefix))) {
-      throw new Error("Stripe key does not match the deployment's mode");
-    }
-    stripeClient = new Stripe(key, { maxNetworkRetries: 1, timeout: 6000 });
-  }
-  return stripeClient;
-}
-
-async function syncPlan(client: Stripe, uid: string, customer: string) {
-  const started = Date.now();
-  const subscriptions = await client.subscriptions.list({ customer, status: "all", limit: 100 });
-  const relevant = subscriptions.data.filter(subscription =>
-    subscription.metadata.project === PROJECT && subscription.metadata.uid === uid
-  );
-  const plus = relevant.some(subscriptionGrantsPlus);
-  await getStore().forTenant(uid).recordBillingPlan(customer, started, plus);
-  return { plus, hasSubscription: relevant.some(s => !["canceled", "incomplete_expired"].includes(s.status)) };
-}
 
 export const handler: APIGatewayProxyHandlerV2 = async event => {
   const method = event.requestContext.http.method;
@@ -52,34 +20,6 @@ export const handler: APIGatewayProxyHandlerV2 = async event => {
   const raw = event.isBase64Encoded
     ? Buffer.from(event.body ?? "", "base64").toString("utf8") : event.body ?? "";
   try {
-    if (method === "POST" && route === ROOT + "/webhook") {
-      const signature = event.headers["stripe-signature"];
-      if (!signature) return json(400, { error: "invalid_signature" });
-      const secret = await getSecret(process.env.STRIPE_WEBHOOK_PARAM!);
-      const client = await stripe();
-      let stripeEvent: Stripe.Event;
-      try {
-        stripeEvent = client.webhooks.constructEvent(raw, signature, secret);
-      } catch {
-        return json(400, { error: "invalid_signature" });
-      }
-      if (stripeEvent.livemode !== (stripeMode === "live")) {
-        return json(400, { error: "wrong_stripe_mode" });
-      }
-      if (stripeEvent.type === "customer.subscription.created" ||
-          stripeEvent.type === "customer.subscription.updated" ||
-          stripeEvent.type === "customer.subscription.deleted") {
-        const subscription = stripeEvent.data.object;
-        const uid = subscription.metadata.uid;
-        const customer = typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
-        if (subscription.metadata.project === PROJECT && /^[a-f0-9]{20}$/.test(uid) &&
-            (await getStore().forTenant(uid).getBilling()).customer === customer) {
-          await syncPlan(client, uid, customer);
-        }
-      }
-      return json(200, { ok: true });
-    }
-
     const token = /^Bearer\s+(.+)$/i.exec(event.headers.authorization ?? "")?.[1];
     if (!token) return json(401, { error: "unauthorized" });
     const identity = await verifyJwt(token).catch(() => null);
@@ -95,6 +35,7 @@ export const handler: APIGatewayProxyHandlerV2 = async event => {
     if (method === "POST" && route === ROOT + "/portal" && billing.customer) {
       const session = await (await stripe()).billingPortal.sessions.create({
         customer: billing.customer, return_url: site + "/account",
+        ...(process.env.STRIPE_PORTAL_CONFIG ? { configuration: process.env.STRIPE_PORTAL_CONFIG } : {}),
       });
       return json(200, { url: session.url });
     }
@@ -129,7 +70,7 @@ export const handler: APIGatewayProxyHandlerV2 = async event => {
         customer,
         mode: "subscription",
         line_items: [{ price: price.id, quantity: 1 }],
-        metadata: { price: price.id },
+        metadata: { price: price.id, project: PROJECT, uid },
         subscription_data: { metadata: { project: PROJECT, uid } },
         success_url: site + "/account?billing=success",
         cancel_url: site + "/account?billing=cancelled",

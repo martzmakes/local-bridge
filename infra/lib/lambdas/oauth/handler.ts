@@ -39,6 +39,7 @@ import {
 import { mcpPath } from "../../shared/mcp-path";
 import { mintJwt, verifyJwt } from "../auth/lib/jwt";
 import { sendMagicLinkEmail } from "../auth/lib/email";
+import { canSignIn, reserveSignInEmail } from "../auth/lib/access";
 import QRCode from "qrcode";
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -48,11 +49,6 @@ const PROJECT_SLUG = process.env.PROJECT_SLUG!;
 const SITE_URL = process.env.SITE_URL!;
 const WAITLIST_TABLE = process.env.WAITLIST_TABLE;
 
-// Allowlist gate — mirrors auth/request.ts exactly.
-const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "")
-  .split(",")
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
 
 const SSO_COOKIE_NAME = `${PROJECT_SLUG}_sso`;
 const AUTH_CODE_TTL_SECONDS = 15 * 60;
@@ -529,7 +525,7 @@ async function handleEmail(raw: string, baseUrl: string) {
   const form = parseFormBody(raw);
   const email = (form.email || "").trim().toLowerCase();
   const oauthCode = (form.oauth_code || form.oauthCode || "").trim();
-  if (!email || !EMAIL_RE.test(email)) {
+  if (!email || email.length > 254 || !EMAIL_RE.test(email)) {
     return errorJson("invalid_request", "valid email is required");
   }
   if (!oauthCode) return errorJson("invalid_request", "oauth_code is required");
@@ -543,7 +539,7 @@ async function handleEmail(raw: string, baseUrl: string) {
   // Allowlist gate — same logic as auth/request.ts. Non-allowlisted emails
   // get a best-effort waitlist write and the same success page, so the
   // response is indistinguishable. No token minted, no SES call.
-  if (!ALLOWED_EMAILS.includes(email)) {
+  if (!canSignIn(email)) {
     if (WAITLIST_TABLE) {
       try {
         await ddb.send(
@@ -568,6 +564,10 @@ async function handleEmail(raw: string, baseUrl: string) {
       }
     }
     return html(200, renderEmailSentPage(email));
+  }
+
+  if (!await reserveSignInEmail(ddb, MAGIC_LINK_TOKENS_TABLE, email)) {
+    return html(429, "<p>Too many sign-in requests. Wait a few minutes, then try again.</p>");
   }
 
   // Mint a magic-link token that carries the oauthCode — when the verify

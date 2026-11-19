@@ -189,7 +189,7 @@ Useful for in-app dashboards that share logic with the MCP-exposed tools.
 
 ## CloudFront proxy — why MCP needs the custom domain
 
-The CDK stack adds CloudFront behaviors that proxy `/mcp/*`, `/oauth/*`, `/.well-known/*`, `/auth/*`, `/checkout`, `/webhook/*` to API Gateway. Without this, Claude rejects widget `ui.domain` hints from raw `*.execute-api.amazonaws.com` URLs ("local connector" error).
+The CDK stack adds CloudFront behaviors that proxy `/mcp`, `/mcp/*`, `/oauth/*`, `/.well-known/*`, `/auth/*`, and `/api/*` to API Gateway. Without this, Claude rejects widget `ui.domain` hints from raw `*.execute-api.amazonaws.com` URLs ("local connector" error).
 
 The custom-domain proxy is **not optional for MCP** — the OAuth metadata's `issuer` and the widget sandbox domain hash both depend on the public URL Claude sees being a real domain.
 

@@ -177,7 +177,7 @@ export function useAuth() {
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          const msg = body.error || "request_failed";
+          const msg = res.status === 429 ? "Too many sign-in requests. Wait a few minutes and try again." : body.error || "request_failed";
           setError(msg);
           return { ok: false, error: msg };
         }

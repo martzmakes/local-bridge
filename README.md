@@ -24,7 +24,7 @@ Calls to an offline Mac fail promptly and expire rather than waiting for it to w
 ## Get started
 
 1. Install the [Mac app](https://bridge.martzmakes.com/updates/LocalBridge-Mac-0.3.1.zip). It needs an Apple silicon Mac, macOS 14 or newer, and Node.js 22 or newer.
-2. **Hosted:** sign in with an invitation. Public hosted signups are [waitlist-only](https://bridge.martzmakes.com/#plans). **Self-hosted:** follow the [AWS walkthrough](docs/self-hosting.md), then choose **Choose Backend… → Self-hosted** before signing in. The walkthrough includes AWS console steps, deployment commands, and a demo server.
+2. **Hosted:** [sign in with your email](https://bridge.martzmakes.com/account) to start on Free. You can upgrade to Plus from your account. **Self-hosted:** follow the [AWS walkthrough](docs/self-hosting.md), then choose **Choose Backend… → Self-hosted** before signing in. The walkthrough includes AWS console steps, deployment commands, and a demo server.
 3. Click **+** in Local Bridge to import a local MCP server or enter its command. Enable the tools you want to share, then click **Save**. Some servers need macOS permissions for the apps or databases they access. [macOS permissions](docs/permissions.md)
 4. Copy the server's URL from **Connect**, add it to your remote MCP client, and authenticate. Start with a read tool while the Mac is online.
 

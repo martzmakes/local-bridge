@@ -7,7 +7,7 @@ This walkthrough takes you from a domain you own to your first working Local Bri
 - An Apple silicon Mac running macOS 14 or newer. Install [Local Bridge 0.3.1 or later](https://bridge.martzmakes.com/updates/LocalBridge-Mac-0.3.1.zip), [Node.js 22 or newer](https://nodejs.org/en/download), and the [AWS CLI for macOS](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
 - An AWS account and a sign-in with permission to deploy CDK and set up Route 53, Certificate Manager, SES, and Systems Manager. Use **US East (N. Virginia)** (`us-east-1`) for the certificate, email, and stack. Route 53 is global.
 - A domain whose DNS records you can edit and an email inbox you can open.
-- The [Local Bridge source code](https://github.com/martzmakes/local-bridge). The repository is private during release preparation. If you have access, choose **Code → Download ZIP** and unzip it. The Mac app download is a separate file.
+- The MIT-licensed [Local Bridge source code on GitHub](https://github.com/martzmakes/local-bridge). Choose **Code → Download ZIP** and unzip it. The Mac app download is a separate file.
 
 AWS bills you for the hosted zone and usage. CDK will show you the changes it plans to make before deployment.
 

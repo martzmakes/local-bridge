@@ -3,6 +3,7 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { PutCommand, DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "crypto";
 import { sendMagicLinkEmail } from "./lib/email";
+import { canSignIn, reserveSignInEmail } from "./lib/access";
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const MAGIC_LINK_TOKENS_TABLE = process.env.MAGIC_LINK_TOKENS_TABLE!;
@@ -11,13 +12,6 @@ const WAITLIST_TABLE = process.env.WAITLIST_TABLE;
 const PROJECT_SLUG = process.env.PROJECT_SLUG || "unknown";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-// Allowlist gate — site is locked to the owner only.
-// Override at deploy time via ALLOWED_EMAILS env var (comma-separated).
-const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "")
-  .split(",")
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
 
 function response(statusCode: number, body: Record<string, unknown>) {
   return {
@@ -83,7 +77,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   // Non-allowlisted → waitlist. Interested visitors are captured as a demand
   // signal instead of silently dropped. Allowlisted owner email falls through
   // to magic-link. Response is identical either way — no enumeration leak.
-  if (!ALLOWED_EMAILS.includes(email)) {
+  if (!canSignIn(email)) {
     if (WAITLIST_TABLE) {
       try {
         await ddb.send(
@@ -111,6 +105,10 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       }
     }
     return response(200, { ok: true });
+  }
+
+  if (!await reserveSignInEmail(ddb, MAGIC_LINK_TOKENS_TABLE, email)) {
+    return response(429, { error: "try_again_later" });
   }
 
   const token = randomUUID();

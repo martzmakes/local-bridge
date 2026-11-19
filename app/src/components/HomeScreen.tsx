@@ -53,8 +53,7 @@ export function HomeScreen({ user, jwt, onSignOut }: Props) {
     <View style={styles.container}>
       <Text style={styles.title}>Local Bridge</Text>
       <Text style={styles.body}>
-        Remote MCP server that forwards tool calls to MCP servers on my Macs. Add this URL as a
-        connector in Claude and sign in with the magic link once:
+        Add this connector URL to your MCP client and sign in with your email to use the tools shared by your Macs.
       </Text>
       <Text selectable style={styles.code}>{MCP_URL}</Text>
       <Text style={styles.body}>Signed in as {user.email}</Text>
@@ -62,10 +61,10 @@ export function HomeScreen({ user, jwt, onSignOut }: Props) {
         <Text style={styles.body}>Hosted plan · {billing.plan === "plus" ? "Plus" : "Free"}</Text>
         {billing.plan === "free" ? <>
           <Pressable style={styles.button} disabled={busy} onPress={() => openBilling("checkout", "monthly")}>
-            <Text style={styles.buttonText}>Choose Plus monthly</Text>
+            <Text style={styles.buttonText}>Choose Plus · $6/month</Text>
           </Pressable>
           <Pressable style={styles.button} disabled={busy} onPress={() => openBilling("checkout", "annual")}>
-            <Text style={styles.buttonText}>Choose Plus annually</Text>
+            <Text style={styles.buttonText}>Choose Plus · $60/year</Text>
           </Pressable>
         </> : null}
         {billing.customer ? <Pressable style={styles.button} disabled={busy} onPress={() => openBilling("portal")}>

@@ -1,22 +1,12 @@
 import { SSMClient, GetParameterCommand } from "@aws-sdk/client-ssm";
 import { SignJWT, jwtVerify } from "jose";
+import { canSignIn } from "./access";
 
 const ssm = new SSMClient({});
 const SECRET_NAME = process.env.JWT_SECRET_NAME!;
 const ISSUER = process.env.DOMAIN!;
 const AUDIENCE = `${process.env.PROJECT_SLUG!}_app`;
 const TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
-
-// Allowlist gate — re-checked on every verifyJwt() call, not just at mint
-// time. JWTs carry a 30-day TTL, so without this a revoked/removed email
-// would keep full access for up to 30 days after being deallowlisted.
-// Override at deploy time via ALLOWED_EMAILS env var (comma-separated).
-function getAllowedEmails(): string[] {
-  return (process.env.ALLOWED_EMAILS || "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-}
 
 let cachedKey: Uint8Array | null = null;
 
@@ -74,10 +64,7 @@ export async function verifyJwt(token: string): Promise<VerifiedJwt> {
     throw new Error("JWT missing subject");
   }
   const email = payload.sub;
-  const allowedEmails = getAllowedEmails();
-  // Fail closed: an unset/empty ALLOWED_EMAILS must never mean "allow
-  // everyone" — that would silently open the deployment to the world.
-  if (allowedEmails.length === 0 || !allowedEmails.includes(email.toLowerCase())) {
+  if (!canSignIn(email)) {
     throw new Error("Email not in allowlist");
   }
   return {

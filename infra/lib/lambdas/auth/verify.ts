@@ -1,13 +1,14 @@
 import { APIGatewayProxyHandlerV2 } from "aws-lambda";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
-  GetCommand,
   DeleteCommand,
+  GetCommand,
   UpdateCommand,
   PutCommand,
   DynamoDBDocumentClient,
 } from "@aws-sdk/lib-dynamodb";
 import { mintJwt } from "./lib/jwt";
+import { canSignIn } from "./lib/access";
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const MAGIC_LINK_TOKENS_TABLE = process.env.MAGIC_LINK_TOKENS_TABLE!;
@@ -18,17 +19,6 @@ const PROJECT_SLUG = process.env.PROJECT_SLUG!;
 // `infra-stack.ts`. If you delete the OAuth handler, leave this — the
 // fallthrough below is harmless when the env var is empty.
 const OAUTH_TABLE = process.env.OAUTH_TABLE || "";
-
-// Defense-in-depth allowlist re-check. The two magic-link *issuance* paths
-// (auth/request.ts + oauth/handler.ts) already gate on ALLOWED_EMAILS, so a
-// token row should only ever carry an allowlisted email. This is the LAST
-// line: if a token somehow exists for a non-allowlisted email (a future
-// regression in an issuance path, or a stale token minted before a gate was
-// added), verify.ts must NOT mint a JWT for it. Same parsing as request.ts.
-const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "")
-  .split(",")
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
 
 const SSO_COOKIE_NAME = `${PROJECT_SLUG}_sso`;
 const SSO_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days — matches JWT TTL
@@ -96,15 +86,20 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   if (!token) {
     return errorPage("LINK INVALID", "Link invalid", "This sign-in link is missing its token.");
   }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
+    return errorPage("LINK INVALID", "Link invalid", "Request a new sign-in link.");
+  }
 
+  // Delete and read in one operation so concurrent clicks cannot reuse a link.
   const tokenRow = await ddb.send(
-    new GetCommand({
+    new DeleteCommand({
       TableName: MAGIC_LINK_TOKENS_TABLE,
       Key: { token },
+      ReturnValues: "ALL_OLD",
     })
   );
 
-  if (!tokenRow.Item) {
+  if (typeof tokenRow.Attributes?.email !== "string") {
     return errorPage(
       "LINK EXPIRED",
       "Link expired",
@@ -113,13 +108,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
-  if (tokenRow.Item.ttl && tokenRow.Item.ttl < nowSeconds) {
-    await ddb.send(
-      new DeleteCommand({
-        TableName: MAGIC_LINK_TOKENS_TABLE,
-        Key: { token },
-      })
-    );
+  if (tokenRow.Attributes.ttl && tokenRow.Attributes.ttl < nowSeconds) {
     return errorPage(
       "LINK EXPIRED",
       "Link expired",
@@ -127,28 +116,15 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     );
   }
 
-  const email = tokenRow.Item.email as string;
+  const email = tokenRow.Attributes.email;
   // OAuth handoff: when the magic-link was minted by /oauth/email, the row
   // carries an `oauthCode`. We approve that auth request and 302 to the
   // client's callback instead of the normal app return.
-  const oauthCode = (tokenRow.Item.oauthCode as string | undefined) || "";
+  const oauthCode = (tokenRow.Attributes.oauthCode as string | undefined) || "";
 
-  // One-shot: consume the token before issuing the JWT.
-  await ddb.send(
-    new DeleteCommand({
-      TableName: MAGIC_LINK_TOKENS_TABLE,
-      Key: { token },
-    })
-  );
-
-  // Defense-in-depth: the issuance paths already gate on the allowlist, so in
-  // correct operation this never fires. But minting a JWT is the privileged
-  // act — re-check here so a token for a non-allowlisted email (issuance-path
-  // regression or stale pre-gate token) can NEVER be exchanged for a session.
-  // The token is already consumed above, so a rejected attempt can't be
-  // replayed. No user upsert, no JWT, no OAuth handoff.
-  if (!ALLOWED_EMAILS.includes((email || "").trim().toLowerCase())) {
-    console.log("verify_blocked_non_allowlisted", { email });
+  // Recheck access in case the deployment switched back to invitations.
+  if (!canSignIn(email)) {
+    console.log("verify_blocked_non_allowlisted");
     return errorPage(
       "ACCESS RESTRICTED",
       "Access restricted",

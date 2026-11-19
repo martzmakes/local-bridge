@@ -2,7 +2,8 @@ import type { APIGatewayProxyEventV2, Context } from "aws-lambda";
 import Stripe from "stripe";
 import { verifyJwt } from "../../lib/lambdas/auth/lib/jwt";
 import { getSecret, getStore } from "../../lib/lambdas/bridge/runtime";
-import { handler, subscriptionGrantsPlus } from "../../lib/lambdas/billing/handler";
+import { handler } from "../../lib/lambdas/billing/handler";
+import { stripe, subscriptionGrantsPlus } from "../../lib/lambdas/billing/stripe";
 import { limitHostedCatalog } from "../../lib/lambdas/billing/plans";
 import type { Machine } from "../../lib/lambdas/bridge/store";
 
@@ -36,23 +37,18 @@ it("caps the authenticated catalog at the plan's machine and server counts", () 
   expect(machines[0].servers).toHaveLength(11);
 });
 
-it("rejects unauthenticated checkout requests and unsigned webhooks", async () => {
-  const request = (route: string) => handler({
-    rawPath: "/api/billing/" + route,
+it("rejects unauthenticated checkout requests", async () => {
+  const response = await handler({
+    rawPath: "/api/billing/checkout",
     requestContext: { http: { method: "POST" } },
     headers: {},
   } as APIGatewayProxyEventV2, {} as Context, () => {});
-  expect(await request("checkout")).toMatchObject({ statusCode: 401 });
-  expect(await request("webhook")).toMatchObject({ statusCode: 400 });
+  expect(response).toMatchObject({ statusCode: 401 });
 });
 
 it("refuses test key material in a live-mode billing deployment", async () => {
   jest.mocked(getSecret).mockResolvedValue("rk_test_mock-key");
-  const response = await handler({
-    rawPath: "/api/billing/webhook", requestContext: { http: { method: "POST" } },
-    headers: { "stripe-signature": "test-signature" },
-  } as unknown as APIGatewayProxyEventV2, {} as Context, () => {});
-  expect(response).toMatchObject({ statusCode: 503 });
+  await expect(stripe()).rejects.toThrow("Stripe key does not match");
   expect(Stripe).not.toHaveBeenCalled();
 });
 
@@ -90,6 +86,8 @@ it("replaces an open monthly Checkout session when an annual purchase is request
   expect(sessions.expire).toHaveBeenCalledWith("cs_monthly");
   expect(sessions.create).toHaveBeenCalledWith(expect.objectContaining({
     line_items: [{ price: "price_annual", quantity: 1 }],
+    metadata: { price: "price_annual", project: "local-bridge", uid: expect.any(String) },
+    subscription_data: { metadata: { project: "local-bridge", uid: expect.any(String) } },
   }), expect.any(Object));
   expect(response).toMatchObject({ statusCode: 200, body: '{"url":"https://checkout.stripe.com/annual"}' });
 });

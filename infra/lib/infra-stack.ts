@@ -3,6 +3,7 @@ import { Construct } from "constructs";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as lambda from "aws-cdk-lib/aws-lambda-nodejs";
 import * as lambdaRuntime from "aws-cdk-lib/aws-lambda";
+import * as lambdaDestinations from "aws-cdk-lib/aws-lambda-destinations";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as apigwv2Integrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -16,6 +17,8 @@ import * as route53 from "aws-cdk-lib/aws-route53";
 import * as route53Targets from "aws-cdk-lib/aws-route53-targets";
 import * as apigwv2Authorizers from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import { StripeEventType, StripeProjectConsumer } from "@martzmakes/stripe-events";
 import * as path from "path";
 
 const PROJECT_SLUG = "local-bridge";
@@ -35,11 +38,12 @@ export class LocalBridgeStack extends cdk.Stack {
     const JWT_SECRET_NAME = `${parameterPrefix}/jwt-secret`;
     const AUDIT_HMAC_PARAM = `${parameterPrefix}/audit-hmac-key`;
     const billingEnabled = process.env.LOCAL_BRIDGE_ENABLE_BILLING === "1";
+    const publicSignups = process.env.LOCAL_BRIDGE_PUBLIC_SIGNUPS === "1";
     const stripeMode = process.env.LOCAL_BRIDGE_STRIPE_MODE ?? "live";
     if (billingEnabled && stripeMode !== "test" && stripeMode !== "live") {
       throw new Error("LOCAL_BRIDGE_STRIPE_MODE must be test or live");
     }
-    const planEnv: Record<string, string> = billingEnabled ? { HOSTED_BILLING: "1" } : {};
+    const planEnv: Record<string, string> = billingEnabled || publicSignups ? { HOSTED_BILLING: "1" } : {};
     const allowedEmails = (process.env.LOCAL_BRIDGE_ALLOWED_EMAILS ?? "")
       .split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
     if (!allowedEmails.length) throw new Error("LOCAL_BRIDGE_ALLOWED_EMAILS requires at least one email");
@@ -130,12 +134,8 @@ export class LocalBridgeStack extends cdk.Stack {
       JWT_SECRET_NAME,
       PROJECT_SLUG,
       DOMAIN,
-      // Allowlist gate — locked to the owner by default. Override at deploy
-      // time via the ALLOWED_EMAILS env (comma-separated) to open access.
-      // Wired into the SHARED lambda env defaults (not just auth-issuance
-      // lambdas) because verifyJwt() re-checks this on every call, not just
-      // at token mint time — every lambda that verifies a JWT needs it.
       ALLOWED_EMAILS: allowedEmails.join(","),
+      ...(publicSignups ? { PUBLIC_SIGNUPS: "1" } : {}),
     };
 
     const lambdaDefaults = {
@@ -410,24 +410,26 @@ export class LocalBridgeStack extends cdk.Stack {
     jwtSecretParam.grantRead(accountHandler);
     bridgeTable.grantReadWriteData(accountHandler);
 
-    // Waitlist joins never use these routes. Enable billing only for accounts invited to sign in.
+    // The web routes handle authenticated checkout. Stripe delivers plan changes to EventBridge.
     if (billingEnabled) {
       const stripeKey = ssm.StringParameter.fromSecureStringParameterAttributes(this, "StripeKey", {
         parameterName: `${parameterPrefix}/stripe-secret-key`,
       });
-      const webhookSecret = ssm.StringParameter.fromSecureStringParameterAttributes(this, "StripeWebhookSecret", {
-        parameterName: `${parameterPrefix}/stripe-webhook-secret`,
-      });
+      const stripeEnv = {
+        BRIDGE_TABLE: bridgeTable.tableName,
+        STRIPE_KEY_PARAM: stripeKey.parameterName,
+        STRIPE_MODE: stripeMode,
+      };
       const billing = new lambda.NodejsFunction(this, "BillingHandler", {
         ...lambdaDefaults,
         timeout: cdk.Duration.seconds(29),
         environment: {
           ...lambdaDefaults.environment,
+          ...stripeEnv,
           SITE_URL: `https://${DOMAIN}`,
-          BRIDGE_TABLE: bridgeTable.tableName,
-          STRIPE_KEY_PARAM: stripeKey.parameterName,
-          STRIPE_WEBHOOK_PARAM: webhookSecret.parameterName,
-          STRIPE_MODE: stripeMode,
+          ...(process.env.LOCAL_BRIDGE_STRIPE_PORTAL_CONFIG
+            ? { STRIPE_PORTAL_CONFIG: process.env.LOCAL_BRIDGE_STRIPE_PORTAL_CONFIG }
+            : {}),
         },
         entry: path.join(__dirname, "lambdas", "billing", "handler.ts"),
         handler: "handler",
@@ -435,19 +437,46 @@ export class LocalBridgeStack extends cdk.Stack {
       });
       jwtSecretParam.grantRead(billing);
       stripeKey.grantRead(billing);
-      webhookSecret.grantRead(billing);
       bridgeTable.grantReadWriteData(billing);
       for (const [pathName, method] of [
         ["status", apigwv2.HttpMethod.GET],
         ["checkout", apigwv2.HttpMethod.POST],
         ["portal", apigwv2.HttpMethod.POST],
-        ["webhook", apigwv2.HttpMethod.POST],
       ] as const) {
         authHttpApi.addRoutes({
           path: "/api/billing/" + pathName, methods: [method],
           integration: new apigwv2Integrations.HttpLambdaIntegration("Billing" + pathName, billing),
         });
       }
+
+      const billingEventsDlq = new sqs.Queue(this, "BillingEventsDlq", {
+        retentionPeriod: cdk.Duration.days(14),
+      });
+      const billingEvents = new lambda.NodejsFunction(this, "BillingEventsHandler", {
+        ...lambdaDefaults,
+        timeout: cdk.Duration.seconds(29),
+        environment: stripeEnv,
+        entry: path.join(__dirname, "lambdas", "billing", "events.ts"),
+        handler: "handler",
+        logGroup: bridgeLogGroup("BillingEventsLogs"),
+        onFailure: new lambdaDestinations.SqsDestination(billingEventsDlq),
+      });
+      stripeKey.grantRead(billingEvents);
+      bridgeTable.grant(billingEvents, "dynamodb:GetItem", "dynamodb:UpdateItem");
+      new StripeProjectConsumer(this, "BillingEvents", {
+        envName: process.env.LOCAL_BRIDGE_STRIPE_EVENTS_ENV ?? (stripeMode === "test" ? "test" : "prod"),
+        project: PROJECT_SLUG,
+        eventTypes: [
+          StripeEventType.CustomerSubscriptionCreated,
+          StripeEventType.CustomerSubscriptionUpdated,
+          StripeEventType.CustomerSubscriptionDeleted,
+        ],
+        extraEventPattern: { detail: { livemode: [stripeMode === "live"] } },
+        handler: billingEvents,
+        grantIdempotency: false,
+        deadLetterQueue: billingEventsDlq,
+        retryAttempts: 5,
+      });
     }
     for (const [p, methods] of [
       ["/api/me", [apigwv2.HttpMethod.GET]],
