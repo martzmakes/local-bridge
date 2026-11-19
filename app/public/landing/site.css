@@ -93,16 +93,25 @@ h3 { font-size: clamp(23px, 2.7vw, 34px); line-height: 1.05; letter-spacing: -.0
 
 .architecture { color: var(--white); background: radial-gradient(ellipse at 94% 6%, #292957, transparent 60%), #171b2e; }
 .architecture .section-heading > p:last-child { color: #d7daee; }
-.flow { display: grid; grid-template-columns: 1fr 34px 1fr 34px 1fr; align-items: center; gap: 12px; margin-top: 40px; }
-.flow-node { min-width: 0; min-height: 169px; border: 1px solid #ffffff1d; border-radius: 22px; background: #ffffff0b; padding: 20px; }
+.architecture-figure { margin-top: 42px; }
+.architecture-figure figcaption { margin-bottom: 15px; color: #e2e3ff; font-size: 15px; font-weight: 680; }
+.flow { display: grid; grid-template-columns: minmax(0, .82fr) 56px minmax(0, 1.5fr) 78px minmax(0, 1fr); align-items: stretch; gap: 8px; }
+.flow-node { min-width: 0; border: 1px solid #ffffff1f; border-radius: 22px; background: #ffffff0b; padding: clamp(16px, 2vw, 24px); }
 .flow-aws { background: #b3b4ff20; border-color: #c6c8fe46; }
-.flow-icon { display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 14px; border-radius: 11px; }
-.client-icon { background: #35405f; color: white; font: 700 19px ui-monospace, monospace; }
-.aws-icon { background: #f9d29e; color: #212231; font-size: 12px; font-weight: 800; letter-spacing: -.02em; }
-.flow-node h3 { font-size: clamp(18px, 2vw, 24px); }
-.flow-node p { margin-top: 8px; color: #dee0f0; font-size: 14px; line-height: 1.4; }
-.flow-arrow { text-align: center; color: #cbcdff; font-size: 24px; }
-.flow-note { color: #d7daee; margin-top: 17px; font-size: 14px; line-height: 1.5; }
+.flow-node h3 { font-size: clamp(20px, 2vw, 25px); }
+.flow-node p, .flow-stops span, .flow-detail p, .flow-note { color: #d7daee; font-size: 14px; line-height: 1.5; }
+.flow-node p { margin: 12px 0; }
+.flow-node code { display: inline-block; padding: 5px 8px; border-radius: 6px; background: #0c102470; font-size: 12px; }
+.flow-hop { align-self: center; display: grid; gap: 4px; justify-items: center; text-align: center; color: #d2d4ff; font-size: 11px; font-weight: 650; }
+.flow-hop b { font-size: 25px; line-height: 1; font-weight: 450; }
+.flow-stops { display: grid; gap: 0; margin: 11px 0 0; padding: 0; list-style: none; }
+.flow-stops li { display: grid; gap: 2px; padding-block: 11px; }
+.flow-stops li + li { border-top: 1px solid #ffffff1c; }
+.flow-stops li:last-child { padding-bottom: 0; }
+.flow-stops strong { font-size: 14px; line-height: 1.35; }
+.flow-detail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 34px; margin-top: 21px; padding: 20px 0; border-bottom: 1px solid #ffffff1c; }
+.flow-detail h3 { margin-bottom: 6px; font-size: 16px; letter-spacing: -.025em; }
+.flow-note { margin-top: 14px; }
 
 .source { background: #fff; }
 .source-content { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr); gap: clamp(28px, 6vw, 82px); align-items: center; }
@@ -120,8 +129,9 @@ h3 { font-size: clamp(23px, 2.7vw, 34px); line-height: 1.05; letter-spacing: -.0
   .shell { width: calc(100% - 46px); }
   .nav { min-height: 64px; }
   .nav-links { gap: 16px; }
-  .flow { grid-template-columns: 1fr 24px 1fr 24px 1fr; gap: 8px; }
-  .flow-node { padding: 15px; }
+  .flow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .flow-hop { justify-self: start; margin-left: 20px; display: flex; flex-direction: row-reverse; align-items: center; gap: 11px; }
+  .flow-hop b { transform: rotate(90deg); }
 }
 @media (max-width: 620px) {
   .shell { width: calc(100% - 36px); }
@@ -134,11 +144,7 @@ h3 { font-size: clamp(23px, 2.7vw, 34px); line-height: 1.05; letter-spacing: -.0
   .feature-grid, .source-content { grid-template-columns: minmax(0, 1fr); }
   .feature-copy { padding-inline: 24px; }
   .feature-image { margin-inline: 17px; height: clamp(205px, 57vw, 314px); }
-  .flow { display: flex; flex-direction: column; align-items: stretch; }
-  .flow-node { min-height: 0; padding: 16px 18px; }
-  .flow-node .flow-icon { float: left; margin: 0 12px 0 0; }
-  .flow-arrow { line-height: 1; transform: rotate(90deg); }
-  .flow-node p { margin-top: 5px; }
+  .flow-detail { grid-template-columns: minmax(0, 1fr); }
   .footer-links { gap: 15px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }

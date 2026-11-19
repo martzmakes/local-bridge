@@ -101,26 +101,45 @@
           <h2 id="aws-title">Your Mac makes<br>the connection.</h2>
           <p>The Mac opens a WebSocket to AWS. A remote client signs in over HTTPS, and AWS relays its MCP calls over that connection. There are no inbound ports to open on your Mac.</p>
         </div>
-        <div class="flow">
-          <div class="flow-node">
-            <span class="flow-icon client-icon" aria-hidden="true">›_</span>
-            <h3>Remote MCP client</h3>
-            <p>HTTPS with OAuth</p>
+        <figure class="architecture-figure" aria-labelledby="flow-title">
+          <figcaption id="flow-title">How a tool call travels</figcaption>
+          <div class="flow">
+            <section class="flow-node">
+              <h3>Remote MCP client</h3>
+              <p>Calls the server’s UUID-based connector URL with an OAuth access token.</p>
+              <code>/mcp/&lt;uuid&gt;</code>
+            </section>
+            <div class="flow-hop"><span>HTTPS</span><b aria-hidden="true">⇄</b></div>
+            <section class="flow-node flow-aws">
+              <h3>AWS relay</h3>
+              <ol class="flow-stops">
+                <li><strong>CloudFront <span aria-hidden="true">→</span> API Gateway HTTP</strong><span>CloudFront serves the site from S3 and routes MCP requests to the HTTP API.</span></li>
+                <li><strong>MCP Lambda</strong><span>Verify identity, enforce tool permissions and limits, and record the pending call in DynamoDB.</span></li>
+                <li><strong>API Gateway WebSocket</strong><span>Send the call over the Mac’s existing connection.</span></li>
+              </ol>
+            </section>
+            <div class="flow-hop"><span>Outbound WSS</span><b aria-hidden="true">⇄</b></div>
+            <section class="flow-node">
+              <h3>Your Mac</h3>
+              <ol class="flow-stops">
+                <li><strong>Local Bridge app</strong><span>You choose which tools to share.</span></li>
+                <li><strong>Node daemon</strong><span>Runs tool calls over stdio and returns the result.</span></li>
+                <li><strong>Local MCP servers</strong><span>Notes, Messages, Reminders, and your own servers.</span></li>
+              </ol>
+            </section>
           </div>
-          <span class="flow-arrow" aria-hidden="true">→</span>
-          <div class="flow-node flow-aws">
-            <span class="flow-icon aws-icon" aria-hidden="true">AWS</span>
-            <h3>Serverless bridge</h3>
-            <p>API Gateway, Lambda, and DynamoDB</p>
+          <div class="flow-detail">
+            <section>
+              <h3>Sign-in and device identity</h3>
+              <p>An auth Lambda sends the magic link through Amazon SES. A separate Lambda authorizer verifies the Mac’s signed connection request. The device’s private key stays in its Keychain.</p>
+            </section>
+            <section>
+              <h3>Return path and audit</h3>
+              <p>A WebSocket Lambda writes the result to the pending DynamoDB record. The MCP Lambda reads it, applies any configured filters, logs tool names and outcomes without arguments or results, and responds over HTTPS.</p>
+            </section>
           </div>
-          <span class="flow-arrow reverse" aria-hidden="true">←</span>
-          <div class="flow-node">
-            <span class="flow-icon"><img src="/landing/icon.png" width="40" height="40" alt=""></span>
-            <h3>Local Bridge for Mac</h3>
-            <p>Outbound WebSocket</p>
-          </div>
-        </div>
-        <p class="flow-note">If the Mac goes offline, calls fail promptly. The bridge does not queue them for later.</p>
+          <p class="flow-note">Calls fail promptly when the Mac is offline. There’s no queue for later delivery.</p>
+        </figure>
       </div>
     </section>
 
