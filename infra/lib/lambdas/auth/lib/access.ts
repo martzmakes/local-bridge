@@ -33,8 +33,9 @@ export async function reserveSignInEmail(
         Update: {
           TableName: table,
           Key: { token: "RATE#" + key + "#" + period + "#" + Math.floor(now / period) },
-          UpdateExpression: "SET ttl = :ttl ADD attempts :one",
-          ConditionExpression: "attribute_not_exists(attempts) OR attempts < :max",
+          UpdateExpression: "SET #ttl = :ttl ADD #attempts :one",
+          ConditionExpression: "attribute_not_exists(#attempts) OR #attempts < :max",
+          ExpressionAttributeNames: { "#ttl": "ttl", "#attempts": "attempts" },
           ExpressionAttributeValues: { ":ttl": now + 2 * period, ":one": 1, ":max": max },
         },
       })),
