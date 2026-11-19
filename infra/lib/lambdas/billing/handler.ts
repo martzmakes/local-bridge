@@ -9,6 +9,7 @@ import { HOSTED_PLANS, PLUS_LOOKUP_KEYS } from "./plans";
 const ROOT = "/api/billing";
 const PROJECT = "local-bridge";
 const site = process.env.SITE_URL!;
+const stripeMode = process.env.STRIPE_MODE === "test" ? "test" : "live";
 let stripeClient: Stripe | undefined;
 const json = (statusCode: number, value: unknown) => ({
   statusCode,
@@ -23,7 +24,14 @@ export function subscriptionGrantsPlus(subscription: Pick<Stripe.Subscription, "
 }
 
 async function stripe() {
-  if (!stripeClient) stripeClient = new Stripe(await getSecret(process.env.STRIPE_KEY_PARAM!), { maxNetworkRetries: 1, timeout: 6000 });
+  if (!stripeClient) {
+    const key = await getSecret(process.env.STRIPE_KEY_PARAM!);
+    const acceptedPrefixes = stripeMode === "test" ? ["rk_test_", "sk_test_", "rkcs_test_"] : ["rk_live_", "sk_live_"];
+    if (!acceptedPrefixes.some(prefix => key.startsWith(prefix))) {
+      throw new Error("Stripe key does not match the deployment's mode");
+    }
+    stripeClient = new Stripe(key, { maxNetworkRetries: 1, timeout: 6000 });
+  }
   return stripeClient;
 }
 
@@ -54,6 +62,9 @@ export const handler: APIGatewayProxyHandlerV2 = async event => {
         stripeEvent = client.webhooks.constructEvent(raw, signature, secret);
       } catch {
         return json(400, { error: "invalid_signature" });
+      }
+      if (stripeEvent.livemode !== (stripeMode === "live")) {
+        return json(400, { error: "wrong_stripe_mode" });
       }
       if (stripeEvent.type === "customer.subscription.created" ||
           stripeEvent.type === "customer.subscription.updated" ||

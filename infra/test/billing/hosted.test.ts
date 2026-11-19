@@ -46,6 +46,16 @@ it("rejects unauthenticated checkout requests and unsigned webhooks", async () =
   expect(await request("webhook")).toMatchObject({ statusCode: 400 });
 });
 
+it("refuses test key material in a live-mode billing deployment", async () => {
+  jest.mocked(getSecret).mockResolvedValue("rk_test_mock-key");
+  const response = await handler({
+    rawPath: "/api/billing/webhook", requestContext: { http: { method: "POST" } },
+    headers: { "stripe-signature": "test-signature" },
+  } as unknown as APIGatewayProxyEventV2, {} as Context, () => {});
+  expect(response).toMatchObject({ statusCode: 503 });
+  expect(Stripe).not.toHaveBeenCalled();
+});
+
 it("replaces an open monthly Checkout session when an annual purchase is requested", async () => {
   const sessions = {
     list: jest.fn().mockResolvedValue({ data: [{
@@ -63,7 +73,7 @@ it("replaces an open monthly Checkout session when an annual purchase is request
     checkout: { sessions },
   } as unknown as Stripe));
   jest.mocked(verifyJwt).mockResolvedValue({ email: "example@example.invalid" });
-  jest.mocked(getSecret).mockResolvedValue("test-key");
+  jest.mocked(getSecret).mockResolvedValue("rk_live_mock-key");
   jest.mocked(getStore).mockReturnValue({ forTenant: () => ({
     getBilling: jest.fn().mockResolvedValue({ customer: "cus_local_bridge" }),
     recordBillingPlan: jest.fn().mockResolvedValue(undefined),

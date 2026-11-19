@@ -19,8 +19,6 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as path from "path";
 
 const PROJECT_SLUG = "local-bridge";
-const JWT_SECRET_NAME = `/${PROJECT_SLUG}/jwt-secret`;
-const AUDIT_HMAC_PARAM = `/${PROJECT_SLUG}/audit-hmac-key`;
 const AUDIT_RETENTION_DAYS = 90;
 
 export class LocalBridgeStack extends cdk.Stack {
@@ -33,7 +31,14 @@ export class LocalBridgeStack extends cdk.Stack {
     const zoneParameter = process.env.LOCAL_BRIDGE_ZONE_PARAM ?? "/local-bridge/route53-zone-id";
     const certificateParameter = process.env.LOCAL_BRIDGE_CERT_PARAM ?? "/local-bridge/certificate-arn";
     const SES_FROM = process.env.LOCAL_BRIDGE_SES_FROM ?? "Local Bridge <no-reply@martzmakes.com>";
+    const parameterPrefix = process.env.LOCAL_BRIDGE_PARAMETER_PREFIX ?? `/${PROJECT_SLUG}`;
+    const JWT_SECRET_NAME = `${parameterPrefix}/jwt-secret`;
+    const AUDIT_HMAC_PARAM = `${parameterPrefix}/audit-hmac-key`;
     const billingEnabled = process.env.LOCAL_BRIDGE_ENABLE_BILLING === "1";
+    const stripeMode = process.env.LOCAL_BRIDGE_STRIPE_MODE ?? "live";
+    if (billingEnabled && stripeMode !== "test" && stripeMode !== "live") {
+      throw new Error("LOCAL_BRIDGE_STRIPE_MODE must be test or live");
+    }
     const planEnv: Record<string, string> = billingEnabled ? { HOSTED_BILLING: "1" } : {};
     const allowedEmails = (process.env.LOCAL_BRIDGE_ALLOWED_EMAILS ?? "operator@example.com")
       .split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
@@ -408,10 +413,10 @@ export class LocalBridgeStack extends cdk.Stack {
     // Waitlist joins never use these routes. Enable billing only for accounts invited to sign in.
     if (billingEnabled) {
       const stripeKey = ssm.StringParameter.fromSecureStringParameterAttributes(this, "StripeKey", {
-        parameterName: "/local-bridge/stripe-secret-key",
+        parameterName: `${parameterPrefix}/stripe-secret-key`,
       });
       const webhookSecret = ssm.StringParameter.fromSecureStringParameterAttributes(this, "StripeWebhookSecret", {
-        parameterName: "/local-bridge/stripe-webhook-secret",
+        parameterName: `${parameterPrefix}/stripe-webhook-secret`,
       });
       const billing = new lambda.NodejsFunction(this, "BillingHandler", {
         ...lambdaDefaults,
@@ -422,6 +427,7 @@ export class LocalBridgeStack extends cdk.Stack {
           BRIDGE_TABLE: bridgeTable.tableName,
           STRIPE_KEY_PARAM: stripeKey.parameterName,
           STRIPE_WEBHOOK_PARAM: webhookSecret.parameterName,
+          STRIPE_MODE: stripeMode,
         },
         entry: path.join(__dirname, "lambdas", "billing", "handler.ts"),
         handler: "handler",
@@ -583,7 +589,7 @@ export class LocalBridgeStack extends cdk.Stack {
       this,
       "SpaFallbackFunction",
       {
-        functionName: `${PROJECT_SLUG.replace(/-/g, "")}SpaFallback`,
+        ...(this.stackName === "LocalBridgeStack" ? { functionName: "localbridgeSpaFallback" } : {}),
         code: cloudfront.FunctionCode.fromInline(`
 function handler(event) {
   var request = event.request;
@@ -674,7 +680,7 @@ function handler(event) {
     });
 
     new s3deploy.BucketDeployment(this, "DeploySite", {
-      sources: [s3deploy.Source.asset(path.join(__dirname, "../../app/dist"))],
+      sources: [s3deploy.Source.asset(process.env.LOCAL_BRIDGE_SITE_DIST_DIR ?? path.join(__dirname, "../../app/dist"))],
       destinationBucket: siteBucket,
       exclude: ["updates/*"],
       distribution,
