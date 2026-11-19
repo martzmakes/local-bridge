@@ -7,3 +7,5 @@ process.env.WS_MANAGEMENT_ENDPOINT = process.env.WS_MANAGEMENT_ENDPOINT || "http
 process.env.PROJECT_SLUG = process.env.PROJECT_SLUG || "local-bridge";
 process.env.DOMAIN = process.env.DOMAIN || "bridge.martzmakes.com";
 process.env.JWT_SECRET_NAME = process.env.JWT_SECRET_NAME || "/local-bridge/jwt-secret";
+
+process.env.LOCAL_BRIDGE_ALLOWED_EMAILS ||= "operator@example.com";

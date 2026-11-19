@@ -49,7 +49,7 @@ const SITE_URL = process.env.SITE_URL!;
 const WAITLIST_TABLE = process.env.WAITLIST_TABLE;
 
 // Allowlist gate — mirrors auth/request.ts exactly.
-const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "operator@example.com")
+const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "")
   .split(",")
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);

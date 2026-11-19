@@ -7,7 +7,7 @@ process.env.AWS_REGION ||= "us-east-1";
 process.env.PROJECT_SLUG ||= "local-bridge";
 process.env.DOMAIN ||= process.env.LOCAL_BRIDGE_DOMAIN || "bridge.martzmakes.com";
 process.env.JWT_SECRET_NAME ||= `${process.env.LOCAL_BRIDGE_PARAMETER_PREFIX ?? "/local-bridge"}/jwt-secret`;
-process.env.ALLOWED_EMAILS ||= process.env.LOCAL_BRIDGE_ALLOWED_EMAILS || "operator@example.com";
+process.env.ALLOWED_EMAILS ||= process.env.LOCAL_BRIDGE_ALLOWED_EMAILS || "";
 
 if (!process.env.BRIDGE_TABLE) {
   try {

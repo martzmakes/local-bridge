@@ -14,7 +14,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Allowlist gate — site is locked to the owner only.
 // Override at deploy time via ALLOWED_EMAILS env var (comma-separated).
-const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "operator@example.com")
+const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "")
   .split(",")
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);

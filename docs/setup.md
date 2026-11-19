@@ -1,6 +1,6 @@
 # Setup and deploy
 
-Everything runs from this Mac with the `your-profile` profile. There is no CI.
+For first-time setup in your own AWS account, follow the [self-hosting walkthrough](self-hosting.md). The commands below assume you exported the domain, certificate, sender, and allowlist settings from that guide.
 
 ```bash
 export AWS_PROFILE=your-profile AWS_REGION=us-east-1 \

@@ -25,7 +25,7 @@ const OAUTH_TABLE = process.env.OAUTH_TABLE || "";
 // line: if a token somehow exists for a non-allowlisted email (a future
 // regression in an issuance path, or a stale token minted before a gate was
 // added), verify.ts must NOT mint a JWT for it. Same parsing as request.ts.
-const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "operator@example.com")
+const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "")
   .split(",")
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);

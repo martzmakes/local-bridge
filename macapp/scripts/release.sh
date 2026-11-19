@@ -7,9 +7,9 @@
 # secure timestamp; no fallback), notarize, staple, check with Gatekeeper, zip.
 #
 # Leaves the app, ZIP, and signed appcast in build/release/<version> (or LOCALBRIDGE_RELEASE_ROOT).
-# Nothing is uploaded anywhere except to Apple's notary service. There is no update feed yet.
+# Apple notarization is the only upload. Run publish-update.sh separately.
 #
-# Needs: the Developer ID Application certificate for team EXAMPLETEAM in the login keychain, and
+# Needs: a Developer ID Application certificate selected by LOCALBRIDGE_SIGNING_IDENTITY in the login keychain, and
 # notary credentials: the App Store Connect API key in ~/.appstoreconnect/private_keys, or the
 # notarytool keychain profile "local-bridge-notary". LOCALBRIDGE_ASC_KEY_ID, LOCALBRIDGE_ASC_KEY_FILE,
 # LOCALBRIDGE_ASC_ISSUER and LOCALBRIDGE_NOTARY_PROFILE override.
@@ -41,10 +41,10 @@ PRODUCT="Local Bridge"
 # Notary credentials: an App Store Connect API key when its .p8 is present (the same key the other
 # release scripts on this Mac use; it needs no keychain), else the notarytool keychain profile.
 NOTARY_PROFILE="${LOCALBRIDGE_NOTARY_PROFILE:-local-bridge-notary}"
-ASC_KEY_ID="${LOCALBRIDGE_ASC_KEY_ID:-EXAMPLEKEY}"
+ASC_KEY_ID="${LOCALBRIDGE_ASC_KEY_ID:-}"
 ASC_KEY_FILE="${LOCALBRIDGE_ASC_KEY_FILE:-$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8}"
-ASC_ISSUER="${LOCALBRIDGE_ASC_ISSUER:-00000000-0000-0000-0000-000000000000}"
-if [[ -n "$ASC_ISSUER" && -f "$ASC_KEY_FILE" ]]; then
+ASC_ISSUER="${LOCALBRIDGE_ASC_ISSUER:-}"
+if [[ -n "$ASC_KEY_ID" && -n "$ASC_ISSUER" && -f "$ASC_KEY_FILE" ]]; then
   NOTARY_AUTH=(--key "$ASC_KEY_FILE" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER")
   NOTARY_LABEL="API key $ASC_KEY_ID"
 else
@@ -64,7 +64,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 # Check the notary credentials before spending time on a build that could not be notarized.
 xcrun notarytool history "${NOTARY_AUTH[@]}" >/dev/null 2>&1 \
-  || die "notary credentials rejected ($NOTARY_LABEL). Add the API key at $ASC_KEY_FILE or run: xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id <id> --team-id EXAMPLETEAM"
+  || die "notary credentials rejected ($NOTARY_LABEL). Add the API key at $ASC_KEY_FILE or run: xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id <id> --team-id <team-id>"
 
 # --- 1. build and sign --------------------------------------------------------------------------
 step "Build $PRODUCT $VERSION ($BUILD)"

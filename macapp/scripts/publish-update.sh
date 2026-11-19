@@ -12,7 +12,6 @@ ZIP="$OUT/$ARCHIVE"
 FEED="$OUT/appcast.xml"
 SIGN_UPDATE="$MACAPP/.build/artifacts/sparkle/Sparkle/bin/sign_update"
 KEY_ACCOUNT="${LOCALBRIDGE_SPARKLE_KEY_ACCOUNT:-local-bridge}"
-export AWS_PROFILE="${AWS_PROFILE:-your-profile}"
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 
 [[ -s "$ZIP" && -s "$FEED" && -x "$SIGN_UPDATE" ]] || die "prepare the release with release.sh first"
@@ -23,7 +22,7 @@ BUILD="$(xmllint --xpath 'string(/rss/channel/item/*[local-name()="version"])' "
 [[ "$BUILD" =~ ^[0-9]+$ ]] || die "appcast is missing the numeric build number"
 
 read_stack_output() {
-  aws cloudformation describe-stacks --no-cli-pager --stack-name LocalBridgeStack \
+  aws cloudformation describe-stacks --no-cli-pager --stack-name "${LOCAL_BRIDGE_STACK_NAME:-LocalBridgeStack}" \
     --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text
 }
 BUCKET="$(read_stack_output SiteBucketName)"

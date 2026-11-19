@@ -36,7 +36,7 @@ Install the first Sparkle-enabled build in `/Applications`. Use **Check for Upda
 
 Run these from `macapp` after rebuilding the daemon. Releases are stored under `build/release/<version>`. Each release needs a higher `CFBundleVersion`. The timestamp is the default and `--build <n>` overrides it. The live distribution uses immutable versioned ZIPs under `/updates/` and serves the appcast without caching it.
 
-The release script uses the App Store Connect API key if available and otherwise uses the `local-bridge-notary` Keychain profile. Override the notary settings with `LOCALBRIDGE_ASC_KEY_ID`, `LOCALBRIDGE_ASC_KEY_FILE`, `LOCALBRIDGE_ASC_ISSUER`, or `LOCALBRIDGE_NOTARY_PROFILE`. Set `LOCALBRIDGE_RELEASE_ROOT` for a different release directory.
+Set `LOCALBRIDGE_SIGNING_IDENTITY` to your Developer ID Application certificate before running the release script. The release script uses the App Store Connect API key if available and otherwise uses the `local-bridge-notary` Keychain profile. Override the notary settings with `LOCALBRIDGE_ASC_KEY_ID`, `LOCALBRIDGE_ASC_KEY_FILE`, `LOCALBRIDGE_ASC_ISSUER`, or `LOCALBRIDGE_NOTARY_PROFILE`. Set `LOCALBRIDGE_RELEASE_ROOT` for a different release directory.
 
 The Sparkle private key is in the login Keychain under account `local-bridge`. Self-hosted builds can set `LOCALBRIDGE_UPDATE_FEED_URL` and `LOCALBRIDGE_SPARKLE_PUBLIC_KEY` to their own HTTPS feed and public key. Use `LOCALBRIDGE_SPARKLE_KEY_ACCOUNT` to select that key when preparing and publishing an update.
 

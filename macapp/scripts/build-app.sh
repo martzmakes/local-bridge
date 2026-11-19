@@ -18,7 +18,7 @@ set -euo pipefail
 MACAPP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$MACAPP"
 
-IDENTITY="Developer ID Application: Matt Martz (EXAMPLETEAM)"
+IDENTITY="${LOCALBRIDGE_SIGNING_IDENTITY:-}"
 APP_NAME="Local Bridge"
 EXECUTABLE="LocalBridge"
 AGENT_DIST="$MACAPP/../agent/dist"
@@ -84,7 +84,7 @@ sign_app() {
 
 step "Sign"
 SIGNED_WITH=""
-if security find-identity -v -p codesigning | grep -qF "\"$IDENTITY\""; then
+if [[ -n "$IDENTITY" ]] && security find-identity -v -p codesigning | grep -qF "\"$IDENTITY\""; then
   if sign_app "$IDENTITY" --timestamp; then
     SIGNED_WITH="$IDENTITY, secure timestamp"
   elif [[ "$RELEASE" == "1" ]]; then
@@ -95,7 +95,7 @@ if security find-identity -v -p codesigning | grep -qF "\"$IDENTITY\""; then
     SIGNED_WITH="$IDENTITY, no timestamp"
   fi
 elif [[ "$RELEASE" == "1" ]]; then
-  die "\"$IDENTITY\" is not in the keychain (security find-identity -v -p codesigning). A release needs it."
+  die "Set LOCALBRIDGE_SIGNING_IDENTITY to a Developer ID Application certificate in your Keychain."
 else
   echo "warning: \"$IDENTITY\" not found; signing ad hoc. macOS privacy grants will not stick to an ad hoc build." >&2
   sign_app - --timestamp=none

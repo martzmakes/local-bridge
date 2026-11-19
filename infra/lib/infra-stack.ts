@@ -40,7 +40,7 @@ export class LocalBridgeStack extends cdk.Stack {
       throw new Error("LOCAL_BRIDGE_STRIPE_MODE must be test or live");
     }
     const planEnv: Record<string, string> = billingEnabled ? { HOSTED_BILLING: "1" } : {};
-    const allowedEmails = (process.env.LOCAL_BRIDGE_ALLOWED_EMAILS ?? "operator@example.com")
+    const allowedEmails = (process.env.LOCAL_BRIDGE_ALLOWED_EMAILS ?? "")
       .split(",").map(email => email.trim().toLowerCase()).filter(Boolean);
     if (!allowedEmails.length) throw new Error("LOCAL_BRIDGE_ALLOWED_EMAILS requires at least one email");
     if (DOMAIN === WS_DOMAIN || ![DOMAIN, WS_DOMAIN].every(name => name === zoneName || name.endsWith('.' + zoneName))) {
