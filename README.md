@@ -1,18 +1,24 @@
 # Local Bridge
 
-Remote MCP server at `https://bridge.martzmakes.com/mcp` that lets cloud-hosted agents (Claude channels, ChatGPT, Codex) use MCP servers that only run on my Macs: Apple Notes, Messages, Reminders, Home Assistant, and any other local stdio server.
+Local Bridge connects remote Model Context Protocol (MCP) clients to tools running on your Mac. Use it with local servers for Notes, Messages, and Reminders, or add your own stdio MCP server.
 
 You manage it from the Local Bridge macOS app (`macapp/`): add a local MCP server, switch on the tools you want exposed, and that server becomes its own remote MCP endpoint with its own URL and its own tools, unchanged. One sign-in covers every endpoint.
 
-The Mac dials out to AWS over one WebSocket. No inbound ports, no VPN. A tool is reachable only if it is switched on in the app; write tools are off until you switch them on.
+The Mac dials out to AWS over one WebSocket. A tool is reachable only if you switch it on in the app. Tools that make changes start off. The cloud relay uses API Gateway, Lambda and DynamoDB. [Architecture](https://bridge.martzmakes.com/#how)
+
+## Get started
+
+1. Install the [Mac app](https://bridge.martzmakes.com/updates/LocalBridge-Mac-0.3.1.zip). It needs macOS 14 or newer, Apple silicon, and Node.js 22 or newer.
+2. Sign in with an invitation, or deploy the bridge to your AWS account using the [self-hosting guide](docs/self-hosting.md). For self-hosting, choose **Choose Backend… → Self-hosted** before signing in.
+3. Add a local MCP server and review the tools you want to share. Copy the server's connector URL and add it in your MCP client.
+
+Hosted signup is [waitlist-only](https://bridge.martzmakes.com/#plans). For AWS usage estimates, see [hosted service costs](docs/hosted-service.md).
 
 - Design: [`v1`](docs/superpowers/specs/2026-11-15-local-bridge-design.md), then [`v2: the app and per-server endpoints`](docs/superpowers/specs/2026-11-15-mac-app-per-server-endpoints-design.md), which wins where they differ
 - Plans and status: [`v1`](docs/superpowers/plans/2026-11-15-local-bridge.md), [`v2`](docs/superpowers/plans/2026-11-15-mac-app-per-server-endpoints.md)
 - Day-to-day commands: [`docs/operations.md`](docs/operations.md)
 - macOS permissions each local server needs: [`docs/permissions.md`](docs/permissions.md)
 - First-time setup and deploy: [`docs/setup.md`](docs/setup.md)
-
-See the [self-hosting guide](docs/self-hosting.md) and [hosted service costs and plans](docs/hosted-service.md).
 
 ## Layout
 
@@ -52,3 +58,9 @@ cd infra && npx tsc --noEmit && npx jest
 cd agent && npx tsc --noEmit && npm test
 cd macapp && swift test
 ```
+
+## Contributing and security
+
+See [Contributing](CONTRIBUTING.md), the [threat model](docs/threat-model.md), and the [security reporting policy](SECURITY.md).
+
+Local Bridge is licensed under the [MIT License](LICENSE).
