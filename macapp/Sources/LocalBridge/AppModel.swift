@@ -142,6 +142,7 @@ final class AppModel {
     @ObservationIgnored private var supervisor: DaemonSupervisor?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var pendingSession: AuthSession?
+    @ObservationIgnored private var signInAttempt: UUID?
     @ObservationIgnored private var clients: [String: AccountClient] = [:]
     @ObservationIgnored private var lastRegistrationAttempt: Date?
     @ObservationIgnored private var bootstrapped = false
@@ -216,8 +217,8 @@ final class AppModel {
         if runsWithoutAccount {
             phase = .signedIn
         } else if client().isSignedIn {
-            phase = saved == nil && loadState == .missing ? .namingMachine : .signedIn
-            proposedMachineName = defaultMachineName()
+            phase = needsMachineName ? .namingMachine : .signedIn
+            proposedMachineName = saved?.machine ?? defaultMachineName()
             Task { await self.refreshAccount() }
         }
 
@@ -348,20 +349,16 @@ final class AppModel {
 
     /// A change made in Settings: validated and saved on its own, without taking unsaved server
     /// edits along. Returns what is wrong, or nil when it was applied.
-    func applyGeneral(machine: String? = nil, endpoint: String? = nil, publicBase: String?? = nil) -> String? {
+    func applyGeneral(machine: String) -> String? {
         guard !isPreview, !isReadOnly else { return nil }
         var candidate = saved ?? draft
-        if let machine { candidate.machine = machine }
-        if let endpoint { candidate.endpoint = endpoint }
-        if let publicBase { candidate.publicBase = publicBase }
+        candidate.machine = machine
         guard candidate != (saved ?? draft) else { return nil }
         let issues = ConfigValidator.validate(candidate.normalized()).filter { !$0.path.hasPrefix("servers") }
         if let first = issues.first { return "\(first.path) \(first.message)" }
         guard saved != nil else {
             // No file yet: nothing to write until the first server is saved.
             draft.machine = candidate.machine
-            draft.endpoint = candidate.endpoint
-            draft.publicBase = candidate.publicBase
             return nil
         }
         do {
@@ -369,10 +366,34 @@ final class AppModel {
             saved = written
             loadState = .loaded(written)
             draft.machine = written.machine
-            draft.endpoint = written.endpoint
-            draft.publicBase = written.publicBase
             restartDaemon()
             return nil
+        } catch {
+            return describe(error)
+        }
+    }
+
+    var canChangeBackend: Bool {
+        phase == .signedOut && !isCompletingSignIn && !isRegistering && !isReadOnly && !runsWithoutAccount
+    }
+
+    func applyBackend(publicBase: String, endpoint: String) -> String? {
+        guard canChangeBackend, !isPreview else { return "Sign out before changing backends." }
+        let current = saved ?? BridgeConfig(machine: draft.machine)
+        do {
+            let candidate = try current.switchingBackend(publicBase: publicBase, endpoint: endpoint)
+            guard candidate != current else { return nil }
+            let updatedDraft = try draft.switchingBackend(publicBase: publicBase, endpoint: endpoint)
+            let written = try store.save(candidate)
+            draft = draft == current ? written : updatedDraft
+            saved = written
+            loadState = .loaded(written)
+            draftGeneration += 1
+            accountError = nil
+            lastRegistrationAttempt = nil
+            return nil
+        } catch let issue as ValidationIssue {
+            return issue.message
         } catch {
             return describe(error)
         }
@@ -718,6 +739,10 @@ final class AppModel {
 
     // MARK: - Account
 
+    private var needsMachineName: Bool {
+        !isReadOnly && saved?.account == nil
+    }
+
     private func client() -> AccountClient {
         let base = (saved ?? draft).effectivePublicBase
         if let existing = clients[base] { return existing }
@@ -732,16 +757,21 @@ final class AppModel {
     }
 
     func signIn() {
-        guard !isPreview else { return }
+        guard !isPreview, phase == .signedOut, !isCompletingSignIn else { return }
         accountError = nil
         phase = .waitingForBrowser
+        let attempt = UUID()
+        signInAttempt = attempt
         let client = client()
         Task {
             do {
                 let session = try await client.beginSignIn()
+                guard self.signInAttempt == attempt else { return }
                 self.pendingSession = session
                 NSWorkspace.shared.open(session.authorizeURL)
             } catch {
+                guard self.signInAttempt == attempt else { return }
+                self.signInAttempt = nil
                 self.phase = .signedOut
                 self.accountError = self.describe(error)
             }
@@ -749,6 +779,7 @@ final class AppModel {
     }
 
     func cancelSignIn() {
+        signInAttempt = nil
         pendingSession = nil
         phase = .signedOut
     }
@@ -766,6 +797,7 @@ final class AppModel {
             return
         }
         pendingSession = nil
+        signInAttempt = nil
         isCompletingSignIn = true
         let client = client()
         Task {
@@ -774,11 +806,11 @@ final class AppModel {
                 try await client.completeSignIn(callback: url, session: session)
                 self.identity = try await client.me()
                 self.accountError = nil
-                if case .loaded(let config) = self.loadState {
+                if let config = self.saved, !self.needsMachineName {
                     self.phase = .signedIn
                     await self.registerThisMac(named: config.machine)
                 } else {
-                    self.proposedMachineName = self.defaultMachineName()
+                    self.proposedMachineName = self.saved?.machine ?? self.defaultMachineName()
                     self.phase = .namingMachine
                 }
             } catch {
@@ -859,10 +891,10 @@ final class AppModel {
             }
             let registration = try await client().registerMachine(machine, key: key)
             var config = saved ?? draft
-            if saved == nil { config.machine = machine }
+            config.machine = machine
             config.account = registration.uid
             let untouched = saved == nil || draft == saved
-            let written = try store.save(saved == nil ? BridgeConfig(machine: machine, account: registration.uid) : config)
+            let written = try store.save(config)
             saved = written
             loadState = .loaded(written)
             if untouched {
@@ -870,6 +902,7 @@ final class AppModel {
                 draftGeneration += 1
             } else {
                 draft.account = written.account
+                draft.machine = written.machine
             }
             registrationError = nil
             await supervisor?.stop()
@@ -935,6 +968,7 @@ final class AppModel {
         machines = []
         machinesLoaded = false
         pendingSession = nil
+        signInAttempt = nil
         registrationError = nil
         phase = .signedOut
     }

@@ -5,14 +5,15 @@ import { join } from "path";
 
 process.env.AWS_REGION ||= "us-east-1";
 process.env.PROJECT_SLUG ||= "local-bridge";
-process.env.DOMAIN ||= "bridge.martzmakes.com";
-process.env.JWT_SECRET_NAME ||= "/local-bridge/jwt-secret";
-process.env.ALLOWED_EMAILS ||= "operator@example.com";
+process.env.DOMAIN ||= process.env.LOCAL_BRIDGE_DOMAIN || "bridge.martzmakes.com";
+process.env.JWT_SECRET_NAME ||= `${process.env.LOCAL_BRIDGE_PARAMETER_PREFIX ?? "/local-bridge"}/jwt-secret`;
+process.env.ALLOWED_EMAILS ||= process.env.LOCAL_BRIDGE_ALLOWED_EMAILS || "operator@example.com";
 
 if (!process.env.BRIDGE_TABLE) {
   try {
     const outputs = JSON.parse(readFileSync(join(__dirname, "..", "cdk-outputs.json"), "utf8"));
-    process.env.BRIDGE_TABLE = outputs.LocalBridgeStack.BridgeTableName;
+    const stackName = process.env.LOCAL_BRIDGE_STACK_NAME ?? "LocalBridgeStack";
+    process.env.BRIDGE_TABLE = outputs[stackName].BridgeTableName;
   } catch {
     // Left unset; commands that need the table fail with a clear message.
   }

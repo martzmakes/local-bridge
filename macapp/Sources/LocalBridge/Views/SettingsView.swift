@@ -24,7 +24,7 @@ struct SettingsView: View {
 /// Each field applies on Return or when focus leaves it. There is no Save button here.
 struct GeneralSettings: View {
     enum Field: Hashable {
-        case machine, node, endpoint, publicBase
+        case machine, node
     }
 
     @Environment(AppModel.self) private var model
@@ -32,8 +32,7 @@ struct GeneralSettings: View {
     @FocusState private var focus: Field?
     @State private var machine = ""
     @State private var nodePath = ""
-    @State private var endpoint = ""
-    @State private var publicBase = ""
+    @State private var showingBackend = false
     @State private var errors: [Field: String] = [:]
 
     var body: some View {
@@ -69,19 +68,20 @@ struct GeneralSettings: View {
             }
 
             Section {
-                TextField("Bridge connection", text: $endpoint)
-                    .focused($focus, equals: .endpoint)
-                    .onSubmit { commit(.endpoint) }
-                    .disabled(readOnly)
-                TextField("Public address", text: $publicBase, prompt: Text(BridgeConfig.defaultPublicBase))
-                    .focused($focus, equals: .publicBase)
-                    .onSubmit { commit(.publicBase) }
-                    .disabled(readOnly)
+                let config = model.saved ?? model.draft
+                LabeledContent("Public HTTPS URL", value: config.effectivePublicBase)
+                    .textSelection(.enabled)
+                LabeledContent("WebSocket URL", value: config.endpoint)
+                    .textSelection(.enabled)
+                Button("Choose Backend…") { showingBackend = true }
+                    .disabled(!model.canChangeBackend)
             } header: {
-                Text("Bridge")
+                Text("Backend")
             } footer: {
-                footer(errors[.endpoint] != nil ? .endpoint : .publicBase,
-                       "The connection is where this Mac dials out to. The public address is where agents reach it, and where you sign in. Changes apply when you press Return and restart the bridge.")
+                Text(model.phase == .signedIn
+                     ? "Sign out in Account settings to switch backends."
+                     : "Choose Local Bridge hosting or enter the URLs from your AWS deployment.")
+                    .formFooter()
             }
 
             if updater.isConfigured {
@@ -105,6 +105,7 @@ struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showingBackend) { BackendSettingsSheet() }
         .onAppear {
             load()
             model.refreshLaunchAtLogin()
@@ -128,8 +129,6 @@ struct GeneralSettings: View {
     private func load() {
         let config = model.saved ?? model.draft
         machine = config.machine
-        endpoint = config.endpoint
-        publicBase = config.publicBase ?? ""
         nodePath = model.nodeOverride
     }
 
@@ -137,11 +136,6 @@ struct GeneralSettings: View {
         switch field {
         case .machine:
             errors[.machine] = model.applyGeneral(machine: machine.trimmingCharacters(in: .whitespaces))
-        case .endpoint:
-            errors[.endpoint] = model.applyGeneral(endpoint: endpoint.trimmingCharacters(in: .whitespaces))
-        case .publicBase:
-            let trimmed = publicBase.trimmingCharacters(in: .whitespaces)
-            errors[.publicBase] = model.applyGeneral(publicBase: .some(trimmed.isEmpty ? nil : trimmed))
         case .node:
             model.setNodeOverride(nodePath)
         }
@@ -158,6 +152,71 @@ struct GeneralSettings: View {
         if panel.runModal() == .OK, let url = panel.url {
             nodePath = url.path
             model.setNodeOverride(url.path)
+        }
+    }
+}
+
+struct BackendSettingsSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var selfHosted = false
+    @State private var address = ""
+    @State private var connection = ""
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Choose Backend").font(.title2.weight(.semibold))
+            Form {
+                Picker("Hosting", selection: $selfHosted) {
+                    Text("Local Bridge hosting").tag(false)
+                    Text("Self-hosted").tag(true)
+                }
+                if selfHosted {
+                    TextField("Public HTTPS URL", text: $address, prompt: Text("https://bridge.example.com"))
+                    TextField("WebSocket URL", text: $connection, prompt: Text("wss://bridge-ws.example.com"))
+                    Text("Use PublicBaseUrl and DeviceEndpoint from the AWS CDK deployment.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.columns)
+
+            if !(model.saved ?? model.draft).servers.isEmpty {
+                Text("When you switch backends, your server settings carry over with servers turned off. Review access and turn them back on after signing in.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red)
+                    .font(.callout)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save Backend") {
+                    error = model.applyBackend(
+                        publicBase: selfHosted ? address : BridgeConfig.defaultPublicBase,
+                        endpoint: selfHosted ? connection : BridgeConfig.defaultEndpoint
+                    )
+                    if error == nil { dismiss() }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!model.canChangeBackend)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+        .onAppear {
+            let config = model.saved ?? model.draft
+            address = config.effectivePublicBase
+            connection = config.endpoint
+            selfHosted = address != BridgeConfig.defaultPublicBase || connection != BridgeConfig.defaultEndpoint
+            if !selfHosted {
+                address = ""
+                connection = ""
+            }
         }
     }
 }

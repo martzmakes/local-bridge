@@ -160,6 +160,37 @@ final class ConfigTests: XCTestCase {
         XCTAssertNotEqual(try store.save(saved).endpointURL(forServer: "notes"), endpoint)
     }
 
+    func testBackendSwitchPersistsBothURLsAndTurnsOffExistingServers() throws {
+        let store = ConfigStore(url: makeTempDir().appendingPathComponent("config.json"))
+        let original = try store.save(BridgeConfig(machine: "mini", account: "old-account", servers: [
+            "notes": ServerConfig(command: "/bin/echo", read: ["list_notes"]),
+        ]))
+        let hosted = try original.switchingBackend(
+            publicBase: "https://bridge.martzmakes.com/", endpoint: BridgeConfig.defaultEndpoint)
+        XCTAssertEqual(hosted, original)
+
+        let switched = try store.save(try original.switchingBackend(
+            publicBase: " HTTPS://Bridge.Example/ ", endpoint: " wss://Bridge-Ws.Example/prod "))
+        XCTAssertEqual(store.load(), .loaded(switched))
+        XCTAssertEqual(switched.effectivePublicBase, "https://bridge.example")
+        XCTAssertEqual(switched.endpoint, "wss://bridge-ws.example/prod")
+        XCTAssertNil(switched.account)
+        XCTAssertEqual(switched.servers["notes"]?.isEnabled, false)
+        XCTAssertEqual(switched.servers["notes"]?.read, ["list_notes"])
+        XCTAssertEqual(switched.servers["notes"]?.endpointId, original.servers["notes"]?.endpointId)
+    }
+
+    func testBackendSwitchRejectsUnsafeURLForms() {
+        let config = BridgeConfig(machine: "mini")
+        for base in ["http://bridge.example", "https://user@bridge.example", "https://bridge.example/mcp",
+                     "https://bridge.example?query=1", "https://bridge.example#fragment"] {
+            XCTAssertThrowsError(try config.switchingBackend(publicBase: base, endpoint: "wss://ws.example"))
+        }
+        for endpoint in ["ws://ws.example", "wss://user@ws.example", "wss://ws.example?query=1"] {
+            XCTAssertThrowsError(try config.switchingBackend(publicBase: "https://bridge.example", endpoint: endpoint))
+        }
+    }
+
     func testProposedMachineName() {
         XCTAssertEqual(ConfigValidator.proposedMachineName(fromHost: "Matts-Mac-mini.local"), "mattsmacmini")
         XCTAssertEqual(ConfigValidator.proposedMachineName(fromHost: "MINI"), "mini")

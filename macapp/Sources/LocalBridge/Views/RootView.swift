@@ -15,6 +15,7 @@ struct RootView: View {
 
 struct SignInView: View {
     @Environment(AppModel.self) private var model
+    @State private var showingBackend = false
 
     var body: some View {
         @Bindable var model = model
@@ -36,7 +37,7 @@ struct SignInView: View {
                     .controlSize(.small)
                 Button("Cancel") { model.cancelSignIn() }
             case .namingMachine:
-                Text("Name this Mac. The name is part of every connector URL, so keep it short.")
+                Text("Give this Mac a short name so you can identify it in your Local Bridge account.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: 380)
@@ -70,6 +71,15 @@ struct SignInView: View {
                 Text("Your browser opens and a sign-in link is emailed to you. No password.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button("Choose Backend…") { showingBackend = true }
+                    .buttonStyle(.link)
+                    .disabled(!model.canChangeBackend)
+                if (model.saved ?? model.draft).effectivePublicBase != BridgeConfig.defaultPublicBase {
+                    Text((model.saved ?? model.draft).effectivePublicBase)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
 
             if let error = model.accountError {
@@ -82,5 +92,6 @@ struct SignInView: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showingBackend) { BackendSettingsSheet() }
     }
 }

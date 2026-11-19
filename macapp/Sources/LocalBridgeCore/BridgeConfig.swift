@@ -211,6 +211,39 @@ public struct BridgeConfig: Sendable, Equatable {
         return copy
     }
 
+    public func switchingBackend(publicBase: String, endpoint: String) throws -> BridgeConfig {
+        let baseText = publicBase.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpointText = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var base = URLComponents(string: baseText), ConfigValidator.isHTTPURL(baseText, httpsOnly: true),
+              base.user == nil, base.password == nil, base.query == nil, base.fragment == nil,
+              base.path.isEmpty || base.path == "/" else {
+            throw ValidationIssue(path: "publicBase", message: "Enter an HTTPS origin without a path, credentials, or query.")
+        }
+        guard var socket = URLComponents(string: endpointText), ConfigValidator.isValidEndpoint(endpointText),
+              socket.user == nil, socket.password == nil, socket.query == nil, socket.fragment == nil else {
+            throw ValidationIssue(path: "endpoint", message: "Enter a WSS URL without credentials or a query.")
+        }
+        base.scheme = base.scheme?.lowercased()
+        base.host = base.host?.lowercased()
+        base.path = ""
+        socket.scheme = socket.scheme?.lowercased()
+        socket.host = socket.host?.lowercased()
+        if socket.path == "/" { socket.path = "" }
+        guard let address = base.url?.absoluteString, let connection = socket.url?.absoluteString else {
+            throw ValidationIssue(path: "backend", message: "Enter valid HTTP and WebSocket URLs.")
+        }
+        var currentBase = effectivePublicBase
+        while currentBase.hasSuffix("/") { currentBase.removeLast() }
+        guard address != currentBase || connection != self.endpoint else { return self }
+        var copy = self
+        copy.publicBase = address
+        copy.endpoint = connection
+        copy.account = nil
+        // Exposure selected for one backend must be reviewed before sharing with another.
+        for name in copy.servers.keys { copy.servers[name]?.isEnabled = false }
+        return copy
+    }
+
     public func normalized() -> BridgeConfig {
         var copy = self
         copy.servers = servers.mapValues { $0.normalized() }

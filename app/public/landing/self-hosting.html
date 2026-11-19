@@ -22,7 +22,7 @@
     <ol>
       <li><strong>Prepare your AWS account.</strong> Create two hostnames in a Route 53 zone, an ACM certificate covering both names, and a verified SES sender. The stack deploys to US East (N. Virginia).</li>
       <li><strong>Deploy the CDK stack.</strong> Set the HTTPS and WebSocket addresses, sender, and allowed emails. Create signing secrets in Systems Manager Parameter Store.</li>
-      <li><strong>Connect your Mac.</strong> Set the app’s HTTPS and WebSocket addresses to the ones from your stack, then sign in and add your MCP servers.</li>
+      <li><strong>Connect your Mac.</strong> In Local Bridge 0.3.1 or later, choose <strong>Choose Backend… → Self-hosted</strong> from the sign-in window. Enter the HTTPS and WebSocket URLs from CDK, then sign in and add your MCP servers.</li>
     </ol>
     <p>Deploying requires the source checkout. The repository is private while the open-source release is in preparation.</p>
     <a class="button button-dark" href="https://github.com/martzmakes/local-bridge">Local Bridge on GitHub <span aria-hidden="true">↗</span></a>
